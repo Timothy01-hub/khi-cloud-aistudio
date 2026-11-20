@@ -3,8 +3,10 @@ import {useSearchParams} from 'react-router-dom';
 import {BrandLogo,Msg,Stats,Scroll,People,Loading,useData,useAct,useLogout,money,when,day,readImage,Pin} from './ui.jsx';
 import {Reports} from './reports.jsx';
 const small={padding:'.2rem .6rem',width:'auto'};
+const uPath=(p,u)=>!u?p:p+(p.includes('?')?'&':'?')+'unit_id='+encodeURIComponent(u);
+const useUAct=(setMsg,reload,u)=>{const a=useAct(setMsg,reload);return(p,b)=>a(uPath(p,u),b)};
 
-function Overview(){const [d,load,err]=useData('/api/admin/overview'),[msg,setMsg]=useState(''),act=useAct(setMsg,load);
+function Overview({unitId=''}){const [d,load,err]=useData(uPath('/api/admin/overview',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId);
  useEffect(()=>{const t=setInterval(load,10000);return()=>clearInterval(t)},[load]);
  if(!d)return <Loading err={err}/>;
  const voidIt=id=>{const r=window.prompt('Reason for voiding this entry? (required)');if(r)act('/api/admin/void',{id,reason:r})};
@@ -22,11 +24,11 @@ function Slot({f,slot,label,s,act}){const [pw,setPw]=useState('');
   <form onSubmit={async e=>{e.preventDefault();const r=await act('/api/admin/account',{a:'password',id:s.id,password:pw});if(r)setPw('')}}><input value={pw} onChange={e=>setPw(e.target.value)} placeholder="New password (8+)" required/><button className="ghost">Change password</button></form>
   <button className="ghost" onClick={()=>act('/api/admin/account',{a:'toggle',id:s.id})}>{s.active?'Disable':'Enable'}</button>
   <button className="danger" onClick={()=>window.confirm('Delete this account?')&&act('/api/admin/account',{a:'delete',id:s.id})}>Delete</button></div>}
-function Accounts(){const [d,load,err]=useData('/api/admin/accounts'),[msg,setMsg]=useState(''),act=useAct(setMsg,load);if(!d)return <Loading err={err}/>;
+function Accounts({unitId=''}){const [d,load,err]=useData(uPath('/api/admin/accounts',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId);if(!d)return <Loading err={err}/>;
  return <><Msg m={msg}/><div className="grid">{d.fellowships.map(f=><div className="card" key={f.id}><h3>{f.label||f.name}</h3>{[['main','Main Secretary'],['assistant','Assistant Secretary']].map(([slot,label])=><Slot key={slot} f={f} slot={slot} label={label} s={f.slots[slot]} act={act}/>)}</div>)}</div>
   <form className="card" onSubmit={async e=>{e.preventDefault();const form=e.currentTarget,r=await act('/api/admin/account',{a:'own',password:new FormData(form).get('password')});if(r)form.reset()}}><h3>My (Super Admin) password</h3><input name="password" type="password" minLength={8} required/><button className="ghost">Change</button></form></>}
 
-function Members(){const [d,load,err]=useData('/api/admin/members'),[msg,setMsg]=useState(''),act=useAct(setMsg,load);if(!d)return <Loading err={err}/>;
+function Members({unitId=''}){const [d,load,err]=useData(uPath('/api/admin/members',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId);if(!d)return <Loading err={err}/>;
  return <><Msg m={msg}/><Scroll><table><thead><tr><th>Member</th><th>Phone</th><th>Fellowship (change if wrong)</th><th className="r">Pledged</th><th className="r">Paid</th><th/></tr></thead><tbody>
   {d.rows.map(m=><tr key={m.id}><td>{m.full_name}</td><td>{m.phone}</td><td><select value={m.branch_id} onChange={e=>act('/api/admin/member',{a:'move',id:m.id,branch:e.target.value})}>{d.fellowships.map(b=><option key={b.id} value={b.id}>{b.label||b.name}</option>)}</select></td>
    <td className="r">{money(m.pledged)}</td><td className="r">{money(m.paid)}</td><td><button className="ghost" onClick={()=>window.confirm('Reset password?')&&act('/api/admin/member',{a:'reset',id:m.id})}>Reset password</button></td></tr>)}</tbody></table></Scroll></>}
@@ -43,13 +45,13 @@ function Form({ev,fellowships,act,setMsg,canAll}){const [v,setV]=useState(EMPTY)
   <label className="muted">Banner image (JPG/PNG/WEBP, max 3MB — shown in full to members)</label>
   <input type="file" accept="image/*" key={v.banner?'f1':'f0'} onChange={async e=>{const f=e.target.files[0];if(!f)return;try{const b=await readImage(f);setV(x=>({...x,banner:b}))}catch(x){setMsg('Error: '+x.message)}}}/>
   {v.banner&&<img src={v.banner} alt="" style={{width:'100%',borderRadius:10}}/>}<button>{ev?'Publish event':'Add program'}</button></form>}
-function Content({which}){const [d,load,err]=useData('/api/admin/content'),[msg,setMsg]=useState(''),act=useAct(setMsg,load);if(!d)return <Loading err={err}/>;const ev=which==='events';
+function Content({which,unitId=''}){const [d,load,err]=useData(uPath('/api/admin/content',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId);if(!d)return <Loading err={err}/>;const ev=which==='events';
  return <><Msg m={msg}/><Form ev={ev} fellowships={d.fellowships} act={act} setMsg={setMsg} canAll={d.canAll}/>
   {ev?<Scroll><table><thead><tr><th>Date</th><th>Event</th><th>Venue</th><th>Pin</th><th/></tr></thead><tbody>{d.events.map(r=><tr key={r.id}><td>{day(r.event_date)}</td><td>{r.title}</td><td>{r.location}</td><td>{r.lat!=null?'✔':'—'}</td><td><button className="danger" style={small} onClick={()=>window.confirm('Delete?')&&act('/api/admin/event',{a:'delete',id:r.id})}>×</button></td></tr>)}</tbody></table></Scroll>
   :<Scroll><table><thead><tr><th>Program</th><th className="r">Pledged</th><th className="r">Paid</th><th>Pin</th><th/></tr></thead><tbody>{d.programs.map(r=><tr key={r.id}><td>{r.title}{!r.active&&<span className="muted"> (closed)</span>}</td><td className="r">{money(r.pledged)}</td><td className="r">{money(r.paid)}</td><td>{r.lat!=null?'✔':'—'}</td><td><button className="ghost" style={small} onClick={()=>act('/api/admin/program',{a:'toggle',id:r.id})}>{r.active?'Close':'Open'}</button></td></tr>)}</tbody></table></Scroll>}</>}
 
-function AdminAtt(){const [sp,setSp]=useSearchParams(),g=k=>sp.get(k)||'',[qq,setQq]=useState(g('q'));
- const [d,,err]=useData(`/api/admin/attendance?branch=${g('branch')}&k=${g('k')}&q=${encodeURIComponent(g('q'))}&svc=${g('svc')}`);
+function AdminAtt({unitId=''}){const [sp,setSp]=useSearchParams(),g=k=>sp.get(k)||'',[qq,setQq]=useState(g('q'));
+ const [d,,err]=useData(uPath(`/api/admin/attendance?branch=${g('branch')}&k=${g('k')}&q=${encodeURIComponent(g('q'))}&svc=${g('svc')}`,unitId));
  const set=(o)=>{const n=new URLSearchParams(sp);Object.entries(o).forEach(([k,v])=>v?n.set(k,v):n.delete(k));setSp(n)};if(!d)return <Loading err={err}/>;
  return <><form className="card noprint" onSubmit={e=>{e.preventDefault();set({q:qq})}}><div className="grid"><select value={g('branch')} onChange={e=>set({branch:e.target.value})}><option value="">All fellowships</option>{d.fellowships.map(b=><option key={b.id} value={b.id}>{b.label||b.name}</option>)}</select>
   <select value={g('k')} onChange={e=>set({k:e.target.value})}><option value="">Members &amp; visitors</option><option value="member">Members only</option><option value="visitor">Visitors only</option></select><input value={qq} onChange={e=>setQq(e.target.value)} placeholder="Search name or phone"/></div><button>Filter</button></form>
@@ -57,7 +59,7 @@ function AdminAtt(){const [sp,setSp]=useSearchParams(),g=k=>sp.get(k)||'',[qq,se
   <h3>Services</h3><Scroll><table><thead><tr><th>Date</th><th>Service</th><th>Church</th><th className="r">Present</th><th/></tr></thead><tbody>{d.services.map(r=><tr key={r.id}><td>{r.service_date}</td><td>{r.service_type}</td><td>{r.bn}</td><td className="r">{r.count}</td><td><a href="#" onClick={e=>{e.preventDefault();set({svc:r.id})}}>View list</a></td></tr>)}</tbody></table></Scroll>
   {g('svc')&&<><h3>Present at the selected service</h3><People rows={d.present} branch/></>}<h3>People directory</h3><People rows={d.people} branch/></>}
 
-function Audit(){const [d,,err]=useData('/api/admin/audit');if(!d)return <Loading err={err}/>;
+function Audit({unitId=''}){const [d,,err]=useData(uPath('/api/admin/audit',unitId));if(!d)return <Loading err={err}/>;
  return <Scroll><table><thead><tr><th>Time</th><th>Who</th><th>Action</th><th>Details</th><th>IP</th></tr></thead><tbody>{d.rows.map(r=><tr key={r.id}><td>{when(r.created_at)}</td><td>{r.actor}</td><td>{r.action}</td><td>{r.detail}</td><td>{r.ip}</td></tr>)}</tbody></table></Scroll>}
 
 const KWORD={center:'Centre',branch:'Branch',fellowship:'Fellowship'};
@@ -69,7 +71,7 @@ function UnitEdit({u,all,act}){const [v,setV]=useState({name:u.name,kind:u.kind,
   <input value={v.name} onChange={set('name')} required/><select value={v.kind} onChange={set('kind')}><option value="center">Centre</option><option value="branch">Branch</option><option value="fellowship">Fellowship</option></select>
   <select value={v.parent} onChange={set('parent')}><option value="">Stands on its own (no parent)</option>{all.filter(x=>x.id!==u.id).map(x=><option key={x.id} value={x.id}>Sits under {x.label}</option>)}</select>
   <input value={v.momo} onChange={set('momo')} placeholder="Mobile-money number"/><button className="ghost">Save changes</button></form>}
-function Units(){const [d,load,err]=useData('/api/admin/fellowships'),[msg,setMsg]=useState(''),act=useAct(setMsg,load),E0={name:'',kind:'center',parent:'',momo:''},[v,setV]=useState(E0);if(!d)return <Loading err={err}/>;
+function Units({unitId='',onChange}){const [d,load,err]=useData(uPath('/api/admin/fellowships',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,async()=>{await load();onChange?.()},unitId),E0={name:'',kind:'center',parent:'',momo:''},[v,setV]=useState(E0);if(!d)return <Loading err={err}/>;
  const set=k=>e=>setV({...v,[k]:e.target.value});
  return <><Msg m={msg}/><form className="card" onSubmit={async e=>{e.preventDefault();const r=await act('/api/admin/fellowships',{a:'add',...v});if(r)setV(E0)}}><h3>Add a centre, branch or fellowship</h3>
   <input placeholder="Name, e.g. Lusaka" value={v.name} onChange={set('name')} required/><select value={v.kind} onChange={set('kind')}><option value="center">Centre</option><option value="branch">Branch</option><option value="fellowship">Fellowship</option></select>
@@ -87,19 +89,19 @@ function AdminCard({a,d,act}){const [p,setP]=useState(a.privileges),[pw,setPw]=u
   <form onSubmit={async e=>{e.preventDefault();const r=await act('/api/admin/admin',{a:'password',id:a.id,password:pw});if(r)setPw('')}}><input value={pw} onChange={e=>setPw(e.target.value)} placeholder="New password (8+)" required/><button className="ghost">Change password</button></form>
   <button className="ghost" onClick={()=>act('/api/admin/admin',{a:'toggle',id:a.id})}>{a.active?'Disable':'Enable'}</button>
   <button className="danger" onClick={()=>window.confirm('Delete this admin?')&&act('/api/admin/admin',{a:'delete',id:a.id})}>Delete</button></div>}
-function Admins(){const [d,load,err]=useData('/api/admin/admins'),[msg,setMsg]=useState(''),act=useAct(setMsg,load),E0={name:'',username:'',password:'',branch:'',privileges:['attendance','reports']},[v,setV]=useState(E0),set=k=>e=>setV({...v,[k]:e.target.value});if(!d)return <Loading err={err}/>;
+function Admins({unitId=''}){const [d,load,err]=useData(uPath('/api/admin/admins',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId),E0={name:'',username:'',password:'',branch:'',privileges:['attendance','reports']},[v,setV]=useState(E0),set=k=>e=>setV({...v,[k]:e.target.value});if(!d)return <Loading err={err}/>;
  return <><Msg m={msg}/><form className="card" onSubmit={async e=>{e.preventDefault();const r=await act('/api/admin/admin',{a:'create',...v});if(r)setV(E0)}}><h3>Create an admin</h3>
   <input placeholder="Full name" value={v.name} onChange={set('name')} required/><input placeholder="Username" value={v.username} onChange={set('username')} required/><input placeholder="Password (8+)" value={v.password} onChange={set('password')} required/>
   <select value={v.branch} onChange={set('branch')} required><option value="">Which centre, branch or fellowship will they run?</option>{d.units.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}</select>
   <Privs d={d} value={v.privileges} onChange={p=>setV({...v,privileges:p})}/><button>Create admin</button></form>
   <div className="grid">{d.admins.map(a=><AdminCard key={a.id+a.privileges.join()} a={a} d={d} act={act}/>)}</div></>}
 
-function Leaders(){const [sp,setSp]=useSearchParams(),q=sp.get('q')||'',[qq,setQq]=useState(q),[d,load,err]=useData('/api/admin/leaders?q='+encodeURIComponent(q)),[msg,setMsg]=useState(''),act=useAct(setMsg,load);if(!d)return <Loading err={err}/>;
+function Leaders({unitId=''}){const [sp,setSp]=useSearchParams(),q=sp.get('q')||'',[qq,setQq]=useState(q),[d,load,err]=useData(uPath('/api/admin/leaders?q='+encodeURIComponent(q),unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId);if(!d)return <Loading err={err}/>;
  return <><Msg m={msg}/><p className="muted">Only the Super Admin can make someone a Leader or remove that status. Nobody else can, and the database refuses any other route.</p>
   <form className="card" onSubmit={e=>{e.preventDefault();const n=new URLSearchParams(sp);qq?n.set('q',qq):n.delete('q');setSp(n)}}><input value={qq} onChange={e=>setQq(e.target.value)} placeholder="Search anyone by name or phone"/><button>Search</button></form>
   <People rows={d.people} branch act={r=>r.kind==='leader'?<button className="ghost" style={small} onClick={()=>window.confirm('Remove Leader status?')&&act('/api/admin/leaders',{id:r.id,make:false})}>Remove Leader</button>:<button style={small} onClick={()=>window.confirm('Make '+r.full_name+' a Leader?')&&act('/api/admin/leaders',{id:r.id,make:true})}>Make Leader</button>}/></>}
 
-function Assets(){const [d,load,err]=useData('/api/admin/assets'),[msg,setMsg]=useState(''),act=useAct(setMsg,load),E0={branch:'',name:'',category:'',quantity:'1',value:'',condition:'Good',acquired_on:'',notes:''},[v,setV]=useState(E0),set=k=>e=>setV({...v,[k]:e.target.value});if(!d)return <Loading err={err}/>;
+function Assets({unitId=''}){const [d,load,err]=useData(uPath('/api/admin/assets',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId),E0={branch:'',name:'',category:'',quantity:'1',value:'',condition:'Good',acquired_on:'',notes:''},[v,setV]=useState(E0),set=k=>e=>setV({...v,[k]:e.target.value});if(!d)return <Loading err={err}/>;
  return <><Msg m={msg}/><form className="card" onSubmit={async e=>{e.preventDefault();const r=await act('/api/admin/assets',{a:'add',...v});if(r)setV(E0)}}><h3>Add an asset</h3>
   <input placeholder="Item name, e.g. Sound desk" value={v.name} onChange={set('name')} required/><input placeholder="Category (optional)" value={v.category} onChange={set('category')}/>
   <select value={v.branch} onChange={set('branch')} required><option value="">Which church holds it?</option>{d.units.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}</select>
@@ -112,16 +114,18 @@ function Assets(){const [d,load,err]=useData('/api/admin/assets'),[msg,setMsg]=u
 function ProfileForm({p,act}){const [v,setV]=useState(p),set=k=>e=>setV({...v,[k]:e.target.value});
  return <form className="card" onSubmit={e=>{e.preventDefault();act('/api/admin/profile',{profile:v})}}><h3>Church profile</h3><label className="muted">Vision</label><input value={v.vision} onChange={set('vision')}/><label className="muted">Mission</label><input value={v.mission} onChange={set('mission')}/>
   <label className="muted">Year founded</label><input value={v.founded} onChange={set('founded')}/><label className="muted">Contact email</label><input value={v.email} onChange={set('email')}/><button>Save profile</button></form>}
-function Profile({onChange}){const [d,load,err]=useData('/api/admin/profile'),[msg,setMsg]=useState(''),act=useAct(setMsg,load);if(!d)return <Loading err={err}/>;
+function Profile({onChange,unitId=''}){const [d,load,err]=useData(uPath('/api/admin/profile',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId);if(!d)return <Loading err={err}/>;
  return <><Msg m={msg}/><ProfileForm key={JSON.stringify(d.profile)} p={d.profile} act={act}/><div className="card"><h3>Features</h3>
-  <label className="muted" style={{display:'flex',gap:'.6rem',textAlign:'left'}}><input type="checkbox" style={{width:'auto'}} checked={!!d.features.assets} onChange={async e=>{await act('/api/admin/profile',{feature:'assets',on:e.target.checked});onChange()}}/> Church assets register — {d.features.assets?'ON':'OFF'}</label>
+  <label className="muted" style={{display:'flex',gap:'.6rem',textAlign:'left'}}><input type="checkbox" style={{width:'auto'}} checked={!!d.features.assets} onChange={async e=>{await act('/api/admin/profile',{feature:'assets',on:e.target.checked});onChange?.()}}/> Church assets register — {d.features.assets?'ON':'OFF'}</label>
   <p className="muted">When off, the Assets tab disappears for everyone.</p></div></>}
 
-const LABEL={overview:'Overview',units:'Units',admins:'Admins',leaders:'Leaders',accounts:'Accounts',members:'Members',events:'Events',programs:'Programs',attendance:'Attendance',reports:'Reports',assets:'Assets',audit:'Audit log',profile:'Church profile'};
+export const ADMIN_LABEL={overview:'Overview',units:'Units',admins:'Admins',leaders:'Leaders',accounts:'Accounts',members:'Members',events:'Events',programs:'Programs',attendance:'Attendance',reports:'Reports',assets:'Assets',audit:'Audit log',profile:'Church profile'};
+export function AdminTabBody({tab,unitId='',onChange}){
+ const C={overview:<Overview unitId={unitId}/>,units:<Units unitId={unitId} onChange={onChange}/>,admins:<Admins unitId={unitId}/>,leaders:<Leaders unitId={unitId}/>,accounts:<Accounts unitId={unitId}/>,members:<Members unitId={unitId}/>,events:<Content which="events" unitId={unitId}/>,programs:<Content which="programs" unitId={unitId}/>,attendance:<AdminAtt unitId={unitId}/>,reports:<Reports base="/api/admin" admin unitId={unitId}/>,assets:<Assets unitId={unitId}/>,audit:<Audit unitId={unitId}/>,profile:<Profile unitId={unitId} onChange={onChange}/>};
+ return C[tab]||null}
 export function AdminHome(){const [sp,setSp]=useSearchParams(),logout=useLogout(),[me,reloadMe,err]=useData('/api/admin/me');
  if(!me)return <Loading err={err}/>;
  const tab=me.tabs.includes(sp.get('p'))?sp.get('p'):(me.tabs[0]||'overview');
- const C={overview:<Overview/>,units:<Units/>,admins:<Admins/>,leaders:<Leaders/>,accounts:<Accounts/>,members:<Members/>,events:<Content which="events"/>,programs:<Content which="programs"/>,attendance:<AdminAtt/>,reports:<Reports base="/api/admin" admin/>,assets:<Assets/>,audit:<Audit/>,profile:<Profile onChange={reloadMe}/>};
  return <><header>{me.role==='superadmin'?<BrandLogo title="KINGDOM HERALDS INTERNATIONAL CHURCH"/>:<div style={{display:'flex',alignItems:'center',gap:'.6rem',flexWrap:'wrap'}}><BrandLogo sub={me.brand||me.unit}/> <span className="muted">· {me.name}</span></div>}
-  <nav>{me.tabs.map(k=><a key={k} href="#" className={tab===k?'on':''} onClick={e=>{e.preventDefault();setSp({p:k})}}>{LABEL[k]}</a>)}<a href="#" onClick={e=>{e.preventDefault();logout()}}>Log out</a></nav></header>
- <main key={tab}>{C[tab]}</main></>}
+  <nav>{me.tabs.map(k=><a key={k} href="#" className={tab===k?'on':''} onClick={e=>{e.preventDefault();setSp({p:k})}}>{ADMIN_LABEL[k]}</a>)}<a href="#" onClick={e=>{e.preventDefault();logout()}}>Log out</a></nav></header>
+ <main key={tab}><AdminTabBody tab={tab} onChange={reloadMe}/></main></>}

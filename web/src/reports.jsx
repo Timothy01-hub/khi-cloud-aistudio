@@ -3,10 +3,10 @@ import {api} from './api.js';
 import {Msg,Scroll,money,today} from './ui.jsx';
 const MONEY=['Amount','Pledged','Paid','Balance'],KINDS=[['offerings','Offerings & payments'],['pledges','Pledges'],['people','People directory'],['attendance','Attendance register']];
 
-export function Reports({base,admin}){
+export function Reports({base,admin,unitId=''}){
  const [f,setF]=useState({kind:'offerings',branch:'0',from:today().slice(0,8)+'01',to:today(),type:''}),[d,setD]=useState(null),[msg,setMsg]=useState('');
- const run=async()=>{try{setD(await api(`${base}/report?`+new URLSearchParams(f)));setMsg('')}catch(x){setMsg('Error: '+x.message)}};
- useEffect(()=>{run()},[]);
+ const run=async()=>{try{const qs=new URLSearchParams(f);if(unitId)qs.set('unit_id',unitId);setD(await api(`${base}/report?`+qs));setMsg('')}catch(x){setMsg('Error: '+x.message)}};
+ useEffect(()=>{run()},[unitId]);
  const set=k=>e=>setF({...f,[k]:e.target.value}),rows=d?d.rows:[],cols=rows[0]?Object.keys(rows[0]):[],hd=c=>c.replace(/_/g,' ');
  const total=f.kind==='pledges'?rows.reduce((a,r)=>a+r.Pledged,0):rows.filter(r=>r.Status==='').reduce((a,r)=>a+r.Amount,0);
  const csv=()=>{const q=v=>{let s=String(v??'');if(/^[=+\-@]/.test(s))s="'"+s;return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};

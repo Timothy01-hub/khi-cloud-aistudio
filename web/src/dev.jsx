@@ -2,6 +2,7 @@ import {useCallback,useEffect,useState} from 'react';
 import {useNavigate,useSearchParams} from 'react-router-dom';
 import {api} from './api.js';
 import {BrandLogo,Msg,Scroll,Loading,useAct} from './ui.jsx';
+import {ADMIN_LABEL,AdminTabBody} from './admin.jsx';
 
 const small={padding:'.2rem .6rem',width:'auto'};
 const taStyle={width:'100%',minHeight:84,padding:'.7rem',margin:'.3rem 0',borderRadius:8,border:'1px solid var(--line)',background:'#0f0b3f',color:'var(--tx)',font:'inherit',fontFamily:'monospace',fontSize:'.85rem'};
@@ -190,15 +191,42 @@ function DataTab(){
      </td></tr>)}</tbody></table></Scroll></div></>;
 }
 
-const TABS=[['flags','Flags & Stubs'],['users','Users & Roles'],['settings','Settings & Units'],['data','Data']];
+function ChurchTab({units,onUnitsChange}){
+ const [unitId,setUnitId]=useState('');
+ const [sub,setSub]=useState('overview');
+ const [me,setMe]=useState(null),[err,setErr]=useState('');
+ const loadMe=useCallback(async()=>{try{setMe(await api('/api/admin/me'+(unitId?'?unit_id='+encodeURIComponent(unitId):'')));setErr('')}catch(x){setErr(x.message)}},[unitId]);
+ useEffect(()=>{loadMe()},[loadMe]);
+ const activeTab=me?.tabs?.includes(sub)?sub:(me?.tabs?.[0]||'overview');
+ const refresh=()=>{loadMe();onUnitsChange?.()};
+ return <>
+  <div className="card">
+   <h3>Church scope</h3>
+   <select value={unitId} onChange={e=>{setUnitId(e.target.value);setSub('overview')}}>
+    <option value="">Whole church (Super Admin)</option>
+    {units.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}
+   </select>
+   <p className="muted">{unitId?`Acting as Admin of ${me?.brand||me?.unit||'this unit'} (all privileges enabled; feature flags bypassed; actions logged in dev_audit).`:'Acting as Super Admin for the whole church (all privileges enabled; feature flags bypassed; actions logged in dev_audit).'}</p>
+  </div>
+  {!me?<Loading err={err}/>:<>
+   <nav style={{display:'flex',gap:'.8rem',flexWrap:'wrap',marginBottom:'1rem',padding:'.4rem 0',borderBottom:'1px solid var(--line)'}}>
+    {me.tabs.map(k=><a key={k} href="#" className={activeTab===k?'on':''} onClick={e=>{e.preventDefault();setSub(k)}}>{ADMIN_LABEL[k]}</a>)}
+   </nav>
+   <div key={(unitId||'all')+':'+activeTab}><AdminTabBody tab={activeTab} unitId={unitId} onChange={refresh}/></div>
+  </>}
+ </>;
+}
+
+const TABS=[['flags','Flags & Stubs'],['users','Users & Roles'],['settings','Settings & Units'],['data','Data'],['church','Church']];
 export function DevHome(){
  const [sp,setSp]=useSearchParams(),nav=useNavigate(),[me,setMe]=useState(null),[fail,setFail]=useState(false);
- useEffect(()=>{api('/api/dev/me').then(setMe).catch(()=>setFail(true))},[]);
+ const loadMe=useCallback(()=>{api('/api/dev/me').then(setMe).catch(()=>setFail(true))},[]);
+ useEffect(()=>{loadMe()},[loadMe]);
  if(fail)return <NotFound/>;
  if(!me)return <p className="muted" style={{padding:'2rem'}}>Loading…</p>;
  const tab=TABS.some(t=>t[0]===sp.get('p'))?sp.get('p'):'flags';
  const logout=async()=>{await api('/api/dev/logout',{}).catch(()=>{});nav('/')};
  return <><header><div style={{display:'flex',alignItems:'center',gap:'.6rem',flexWrap:'wrap'}}><BrandLogo sub="Developer"/> <span className="muted">· {me.dev.full_name}</span></div>
   <nav>{TABS.map(([k,l])=><a key={k} href="#" className={tab===k?'on':''} onClick={e=>{e.preventDefault();setSp({p:k})}}>{l}</a>)}<a href="#" onClick={e=>{e.preventDefault();logout()}}>Log out</a></nav></header>
-  <main key={tab}>{tab==='flags'&&<FlagsTab units={me.units}/>}{tab==='users'&&<UsersTab/>}{tab==='settings'&&<SettingsTab/>}{tab==='data'&&<DataTab/>}</main></>;
+  <main key={tab}>{tab==='flags'&&<FlagsTab units={me.units}/>}{tab==='users'&&<UsersTab/>}{tab==='settings'&&<SettingsTab/>}{tab==='data'&&<DataTab/>}{tab==='church'&&<ChurchTab units={me.units} onUnitsChange={loadMe}/>}</main></>;
 }

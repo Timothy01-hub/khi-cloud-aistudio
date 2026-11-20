@@ -7,7 +7,7 @@ const money=n=>'K '+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,ma
 const CLEAR='khm=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0';
 const CLEAR_S=CLEAR.replace('khm','khs');
 const CLEAR_D=CLEAR.replace('khm','khd');
-const json=(o,status=200,cookie)=>{const h={'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};if(cookie)h['Set-Cookie']=cookie;return new Response(JSON.stringify(o),{status,headers:h})};
+const json=(o,status=200,cookie)=>{const h=new Headers({'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});if(cookie)(Array.isArray(cookie)?cookie:[cookie]).forEach(c=>h.append('Set-Cookie',c));return new Response(JSON.stringify(o),{status,headers:h})};
 const bad=(error,status=400)=>json({error},status);
 const DEPTS=['Ushering','Intercessory','Media','Protocol','Hospitality','Praise Team','Evangelism','Sanctuary Keeping'];
 const KW={center:'Centre',branch:'Branch',fellowship:'Fellowship'};
@@ -268,95 +268,137 @@ async function sbReport(env,f,scopeIds){
 
 /* ---- admin & Super Admin ---- */
 async function adminRoute(req,env,p,q,b,ip){
- const sid=await who(env,req,'khs');if(!sid)return bad('Please sign in.',401);
- const me=(await sb(env,`staff?id=eq.${sid}&active=eq.true&select=*,branches(name)`))[0];
- const isSuper=me?.role==='superadmin';if(!me||(!isSuper&&me.role!=='admin'))return json({error:'Please sign in.'},401,CLEAR_S);
+ const sid=await who(env,req,'khs'),did=await who(env,req,'khd');
+ const staffRow=sid?(await sb(env,`staff?id=eq.${sid}&active=eq.true&select=*,branches(name)`))[0]:null;
+ const staffAdmin=staffRow&&(staffRow.role==='superadmin'||staffRow.role==='admin')?staffRow:null;
+ let devUser=null,devJwt=null;
+ if(did){devJwt=await mkDevJwt(env,did);devUser=(await devSb(env,devJwt,`dev_accounts?id=eq.${did}&active=eq.true&select=id,username,full_name,active`).catch(()=>[]))[0]||null}
+ const wantDev=!!devUser&&(!staffAdmin||q.unit_id!==undefined||b.unit_id!==undefined);
+ if(!wantDev&&!staffAdmin)return json({error:'Please sign in.'},401,CLEAR_S);
+ const isDev=wantDev;
+ const dbUse=(path,o)=>isDev?devSb(env,devJwt,path,o):sb(env,path,o);
+ const auditDev=(action,detail='')=>isDev?devSb(env,devJwt,'dev_audit',{m:'POST',b:{dev_id:devUser.id,action,detail:String(detail||''),ip},prefer:'return=minimal'}):Promise.resolve();
+ const allB=await dbUse('branches?select=*&order=is_main.desc,name.asc');
+ const rawUid=q.unit_id??b.unit_id;
+ const devUnitId=isDev&&rawUid!==undefined&&rawUid!==null&&rawUid!==''&&rawUid!=='all'?+rawUid:null;
+ if(isDev&&devUnitId!==null&&(!Number.isInteger(devUnitId)||!allB.some(x=>x.id===devUnitId)))return bad('Invalid unit_id.');
+ const isSuper=isDev?devUnitId===null:staffAdmin.role==='superadmin';
+ const me=isDev?{id:devUser.id,role:isSuper?'superadmin':'admin',branch_id:devUnitId,full_name:devUser.full_name,username:devUser.username,privileges:GRANT.map(g=>g[0]),branches:devUnitId?{name:allB.find(x=>x.id===devUnitId)?.name||''}:null}:staffAdmin;
  const unitScope=isSuper?null:me.branch_id;
- if(!await featOn(env,isSuper?'app.superadmin':'app.admin',unitScope))return bad('This app is currently disabled.',403);
- const feats=await myFeats(env,unitScope),flagOn=k=>feats['admin.menu.'+k]!==false;
- const allB=await sb(env,'branches?select=*&order=is_main.desc,name.asc');
+ if(!isDev&&!await featOn(env,isSuper?'app.superadmin':'app.admin',unitScope))return bad('This app is currently disabled.',403);
+ const feats=isDev?{}:await myFeats(env,unitScope),flagOn=k=>isDev?true:feats['admin.menu.'+k]!==false;
  const scope=isSuper?null:kidsOf(allB,me.branch_id);
- const can=pr=>isSuper||(me.privileges||[]).includes(pr),by=me.username,tag=me.role+':'+by,post=req.method==='POST';
+ const can=pr=>isDev||isSuper||(me.privileges||[]).includes(pr),by=isDev?'developer:'+devUser.username:me.username,tag=isDev?'developer:'+devUser.username:me.role+':'+by,post=req.method==='POST';
  const units=()=>allB.filter(x=>!scope||scope.includes(x.id)).map(x=>({...x,label:unitLabel(x)}));
- const featSet=async()=>((await sb(env,"settings?key=eq.features&select=value"))[0]?.value)||{assets:false};
+ const featSet=async()=>((await dbUse("settings?key=eq.features&select=value"))[0]?.value)||{assets:false};
  if(p==='/api/admin/me'){
   const fs=await featSet();
-  const tabs=['overview',...(isSuper?['units','admins','leaders']:[]),...(can('accounts')&&flagOn('accounts')?['accounts']:[]),...(can('members')&&flagOn('members')?['members']:[]),...(can('events')&&flagOn('events')?['events']:[]),...(can('programs')&&flagOn('programs')?['programs']:[]),...(can('attendance')&&flagOn('attendance')?['attendance']:[]),...(can('reports')&&flagOn('reports')?['reports']:[]),...(fs.assets&&can('assets')&&flagOn('assets')?['assets']:[]),...(can('audit')&&flagOn('audit')?['audit']:[]),...(isSuper?['profile']:[])];
+  const tabs=['overview',...(isSuper?['units','admins','leaders']:[]),...(can('accounts')&&flagOn('accounts')?['accounts']:[]),...(can('members')&&flagOn('members')?['members']:[]),...(can('events')&&flagOn('events')?['events']:[]),...(can('programs')&&flagOn('programs')?['programs']:[]),...(can('attendance')&&flagOn('attendance')?['attendance']:[]),...(can('reports')&&flagOn('reports')?['reports']:[]),...((isDev||fs.assets)&&can('assets')&&flagOn('assets')?['assets']:[]),...(can('audit')&&flagOn('audit')?['audit']:[]),...(isSuper?['profile']:[])];
   const br=isSuper?{brand:'KINGDOM HERALDS INTERNATIONAL CHURCH'}:await brandOf(env,me.branch_id,me.branches?.name||'');
-  return json({role:me.role,name:me.full_name,tabs,unit:isSuper?'KINGDOM HERALDS INTERNATIONAL CHURCH':br.branch,brand:br.brand,privileges:me.privileges||[],features:feats})}
+  return json({role:me.role,is_dev:isDev,name:me.full_name,tabs,unit:isSuper?'KINGDOM HERALDS INTERNATIONAL CHURCH':br.branch,brand:br.brand,privileges:me.privileges||[],features:feats})}
  if(p==='/api/admin/overview'){
   const us=units(),inS=scope?`branch_id=in.(${scope.join(',')})&`:'';
-  const [recent,ts]=await Promise.all([sb(env,`offerings?${inS}order=id.desc&limit=40`),Promise.all(us.map(x=>rpc(env,'branch_totals',{p_branch:x.id})))]);
+  const [recent,ts]=await Promise.all([dbUse(`offerings?${inS}order=id.desc&limit=40`),Promise.all(us.map(x=>rpc(env,'branch_totals',{p_branch:x.id})))]);
   const bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
   const rows=us.map((x,i)=>{const a=ts[i]||[],pT=+(a.find(y=>y.type==='physical')?.today||0),dT=+(a.find(y=>y.type==='digital')?.today||0),m=+(a.find(y=>y.type==='physical')?.month||0)+ +(a.find(y=>y.type==='digital')?.month||0);return{id:x.id,name:x.label,is_main:x.is_main,kind:x.kind,today:pT+dT,month:m}});
   const tot=rows.reduce((a,r)=>({today:a.today+r.today,month:a.month+r.month}),{today:0,month:0});
   return json({rows,totals:{pToday:tot.today,dToday:0,month:tot.month},recent:(recent||[]).map(x=>({...x,bn:bnMap[x.branch_id]||''}))})}
  if(p==='/api/admin/fellowships'){if(!isSuper)return bad('Only the Super Admin can do that.',403);if(!post)return json(allB.map(x=>({...x,label:unitLabel(x)})));
   const par=b.parent?+b.parent:null,kind=['center','branch','fellowship'].includes(b.kind)?b.kind:'fellowship';
-  if(b.a==='add'){const u=(await sb(env,'branches',{m:'POST',b:{name:String(b.name||'').trim(),kind,parent_id:par,is_main:false,momo_number:b.momo||null},prefer:'return=representation'}))[0];
-   return json({ok:true,message:unitLabel(u)+' added.'})}
-  await sb(env,`branches?id=eq.${+b.id||0}`,{m:'PATCH',b:{name:String(b.name||'').trim(),kind,parent_id:par,momo_number:b.momo||null},prefer:'return=minimal'});return json({ok:true,message:'Saved.'})}
+  if(b.a==='add'){const u=(await dbUse('branches',{m:'POST',b:{name:String(b.name||'').trim(),kind,parent_id:par,is_main:false,momo_number:b.momo||null},prefer:'return=representation'}))[0];
+   await auditDev('admin_add_unit',unitLabel(u));return json({ok:true,message:unitLabel(u)+' added.'})}
+  await dbUse(`branches?id=eq.${+b.id||0}`,{m:'PATCH',b:{name:String(b.name||'').trim(),kind,parent_id:par,momo_number:b.momo||null},prefer:'return=minimal'});
+  await auditDev('admin_edit_unit',String(b.name||''));return json({ok:true,message:'Saved.'})}
  if(p==='/api/admin/admins'){if(!isSuper)return bad('Only the Super Admin can do that.',403);
-  const st=await sb(env,"staff?role=eq.admin&select=id,username,full_name,branch_id,privileges,active"),bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
+  const st=await dbUse("staff?role=eq.admin&select=id,username,full_name,branch_id,privileges,active"),bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
   return json({admins:(st||[]).map(s=>({...s,unit:bnMap[s.branch_id]||''})),units:allB.map(x=>({...x,label:unitLabel(x)})),grantable:GRANT,blocked:BLOCK})}
  if(p==='/api/admin/admin'){if(!isSuper)return bad('Only the Super Admin can do that.',403);
-  if(b.a==='create'){await rpc(env,'create_staff',{p_role:'admin',p_branch:+b.branch,p_slot:null,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:b.privileges||[]});return json({ok:true,message:'Admin created.'})}
-  if(b.a==='privileges'){await sb(env,`staff?id=eq.${+b.id}&role=eq.admin`,{m:'PATCH',b:{privileges:b.privileges||[]},prefer:'return=minimal'});return json({ok:true,message:'Privileges saved.'})}
-  if(b.a==='password'){await rpc(env,'staff_set_password',{p_id:+b.id,p_password:String(b.password||'')});return json({ok:true,message:'Password changed.'})}
-  if(b.a==='toggle'){const s=(await sb(env,`staff?id=eq.${+b.id}&role=eq.admin`))[0];if(!s)return bad('Not found',404);await sb(env,`staff?id=eq.${s.id}`,{m:'PATCH',b:{active:!s.active},prefer:'return=minimal'});return json({ok:true,message:!s.active?'Admin enabled.':'Admin disabled.'})}
-  if(b.a==='delete'){await sb(env,`staff?id=eq.${+b.id}&role=eq.admin`,{m:'DELETE',prefer:'return=minimal'});return json({ok:true,message:'Admin deleted.'})}}
+  if(b.a==='create'){if(isDev)await devRpc(env,devJwt,'dev_create_staff',{p_role:'admin',p_branch:+b.branch,p_slot:null,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:b.privileges||[]});
+   else await rpc(env,'create_staff',{p_role:'admin',p_branch:+b.branch,p_slot:null,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:b.privileges||[]});
+   await auditDev('admin_create_admin',b.username);return json({ok:true,message:'Admin created.'})}
+  if(b.a==='privileges'){await dbUse(`staff?id=eq.${+b.id}&role=eq.admin`,{m:'PATCH',b:{privileges:b.privileges||[]},prefer:'return=minimal'});await auditDev('admin_set_privileges','#'+b.id);return json({ok:true,message:'Privileges saved.'})}
+  if(b.a==='password'){if(isDev)await devRpc(env,devJwt,'dev_set_staff_password',{p_id:+b.id,p_password:String(b.password||'')});
+   else await rpc(env,'staff_set_password',{p_id:+b.id,p_password:String(b.password||'')});
+   await auditDev('admin_reset','#'+b.id);return json({ok:true,message:'Password changed.'})}
+  if(b.a==='toggle'){const s=(await dbUse(`staff?id=eq.${+b.id}&role=eq.admin`))[0];if(!s)return bad('Not found',404);await dbUse(`staff?id=eq.${s.id}`,{m:'PATCH',b:{active:!s.active},prefer:'return=minimal'});await auditDev('admin_toggle_admin',s.username);return json({ok:true,message:!s.active?'Admin enabled.':'Admin disabled.'})}
+  if(b.a==='delete'){await dbUse(`staff?id=eq.${+b.id}&role=eq.admin`,{m:'DELETE',prefer:'return=minimal'});await auditDev('admin_delete_admin','#'+b.id);return json({ok:true,message:'Admin deleted.'})}}
  if(p==='/api/admin/leaders'){if(!isSuper)return bad('Only the Super Admin can do that.',403);
-  if(!post){const ps=await sb(env,'people?order=full_name.asc&limit=200'),bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)])),ql=(q.q||'').toLowerCase();
+  if(!post){const ps=await dbUse('people?order=full_name.asc&limit=200'),bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)])),ql=(q.q||'').toLowerCase();
    return json({people:(ps||[]).filter(x=>!ql||[x.full_name,x.phone||''].join(' ').toLowerCase().includes(ql)).slice(0,60).map(x=>({...x,bn:bnMap[x.branch_id]||''}))})}
+  if(isDev){const pe=(await devSb(env,devJwt,`people?id=eq.${+b.id||0}`))[0];if(!pe)return bad('Person not found.');
+   await devSb(env,devJwt,`people?id=eq.${pe.id}`,{m:'PATCH',b:{kind:b.make?'leader':'member',leader_since:b.make?today():null},prefer:'return=minimal'});
+   await auditDev(b.make?'make_leader':'remove_leader',`${pe.full_name} (#${pe.id})`);
+   return json({ok:true,message:pe.full_name+(b.make?' is now a Leader.':' is no longer a Leader.')})}
   return json({ok:true,message:await rpc(env,'set_leader',{p_person:+b.id,p_make:!!b.make,p_by:tag})})}
  if(p==='/api/admin/profile'){if(!isSuper)return bad('Only the Super Admin can do that.',403);
-  if(!post){const [pr,fs]=await Promise.all([sb(env,"settings?key=eq.profile&select=value"),featSet()]);return json({profile:pr?.[0]?.value||{},features:fs})}
-  if(b.feature==='assets'){await sb(env,"settings?key=eq.features",{m:'PATCH',b:{value:{assets:!!b.on}},prefer:'return=minimal'});return json({ok:true,message:'Assets feature switched '+(b.on?'ON':'OFF')+'.'})}
-  await sb(env,"settings?key=eq.profile",{m:'PATCH',b:{value:b.profile},prefer:'return=minimal'});return json({ok:true,message:'Profile saved.'})}
+  if(!post){const [pr,fs]=await Promise.all([dbUse("settings?key=eq.profile&select=value"),featSet()]);return json({profile:pr?.[0]?.value||{},features:fs})}
+  if(b.feature==='assets'){await dbUse("settings?key=eq.features",{m:'PATCH',b:{value:{assets:!!b.on}},prefer:'return=minimal'});await auditDev('feature_assets',b.on?'on':'off');return json({ok:true,message:'Assets feature switched '+(b.on?'ON':'OFF')+'.'})}
+  await dbUse("settings?key=eq.profile",{m:'PATCH',b:{value:b.profile},prefer:'return=minimal'});await auditDev('profile_edit','');return json({ok:true,message:'Profile saved.'})}
  if(p==='/api/admin/accounts'){if(!can('accounts')||!flagOn('accounts'))return bad('You do not have permission for that.',403);
-  const st=await sb(env,"staff?role=eq.secretary&select=id,branch_id,slot,username,full_name,active");
+  const st=await dbUse("staff?role=eq.secretary&select=id,branch_id,slot,username,full_name,active");
   return json({fellowships:units().map(x=>({id:x.id,name:x.name,label:x.label,is_main:x.is_main,slots:{main:(st||[]).find(s=>s.branch_id===x.id&&s.slot==='main')||null,assistant:(st||[]).find(s=>s.branch_id===x.id&&s.slot==='assistant')||null}})),me:{username:by}})}
  if(p==='/api/admin/account'){if(!can('accounts'))return bad('You do not have permission for that.',403);
-  if(b.a==='own'){await rpc(env,'staff_set_password',{p_id:me.id,p_password:String(b.password||'')});return json({ok:true,message:'Your password changed.'})}
+  if(b.a==='own'){if(isDev){await devRpc(env,devJwt,'dev_change_password',{p_id:devUser.id,p_password:String(b.password||'')});await auditDev('change_password','')}
+   else await rpc(env,'staff_set_password',{p_id:me.id,p_password:String(b.password||'')});
+   return json({ok:true,message:'Your password changed.'})}
   if(!flagOn('accounts'))return bad('This feature is currently disabled.',403);
   if(b.a==='create'){if(scope&&!scope.includes(+b.branch))return bad('That church is outside your area.',403);
-   await rpc(env,'create_staff',{p_role:'secretary',p_branch:+b.branch,p_slot:b.slot,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:[]});return json({ok:true,message:'Account created.'})}
-  const s=(await sb(env,`staff?id=eq.${+b.id}&role=eq.secretary`))[0];if(!s||(scope&&!scope.includes(s.branch_id)))return bad('Not found',404);
-  if(b.a==='password'){await rpc(env,'staff_set_password',{p_id:s.id,p_password:String(b.password||'')});return json({ok:true,message:'Password changed.'})}
-  if(b.a==='toggle'){await sb(env,`staff?id=eq.${s.id}`,{m:'PATCH',b:{active:!s.active},prefer:'return=minimal'});return json({ok:true,message:!s.active?'Account enabled.':'Account disabled.'})}
-  if(b.a==='delete'){await sb(env,`staff?id=eq.${s.id}`,{m:'DELETE',prefer:'return=minimal'});return json({ok:true,message:'Account deleted.'})}}
+   if(isDev)await devRpc(env,devJwt,'dev_create_staff',{p_role:'secretary',p_branch:+b.branch,p_slot:b.slot,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:[]});
+   else await rpc(env,'create_staff',{p_role:'secretary',p_branch:+b.branch,p_slot:b.slot,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:[]});
+   await auditDev('admin_create',b.username);return json({ok:true,message:'Account created.'})}
+  const s=(await dbUse(`staff?id=eq.${+b.id}&role=eq.secretary`))[0];if(!s||(scope&&!scope.includes(s.branch_id)))return bad('Not found',404);
+  if(b.a==='password'){if(isDev)await devRpc(env,devJwt,'dev_set_staff_password',{p_id:s.id,p_password:String(b.password||'')});
+   else await rpc(env,'staff_set_password',{p_id:s.id,p_password:String(b.password||'')});
+   await auditDev('admin_reset',s.username);return json({ok:true,message:'Password changed.'})}
+  if(b.a==='toggle'){await dbUse(`staff?id=eq.${s.id}`,{m:'PATCH',b:{active:!s.active},prefer:'return=minimal'});await auditDev('admin_toggle',s.username);return json({ok:true,message:!s.active?'Account enabled.':'Account disabled.'})}
+  if(b.a==='delete'){await dbUse(`staff?id=eq.${s.id}`,{m:'DELETE',prefer:'return=minimal'});await auditDev('admin_delete',s.username);return json({ok:true,message:'Account deleted.'})}}
  if(p==='/api/admin/members'){if(!can('members')||!flagOn('members'))return bad('You do not have permission for that.',403);
-  const ms=await sb(env,`members?${scope?`branch_id=in.(${scope.join(',')})&`:''}select=id,branch_id,full_name,phone,pledges(amount,pledge_payments(amount))`);
+  const ms=await dbUse(`members?${scope?`branch_id=in.(${scope.join(',')})&`:''}select=id,branch_id,full_name,phone,pledges(amount,pledge_payments(amount))`);
   return json({fellowships:units(),rows:(ms||[]).map(m=>({id:m.id,branch_id:m.branch_id,full_name:m.full_name,phone:m.phone,pledged:(m.pledges||[]).reduce((a,x)=>a+ +x.amount,0),paid:(m.pledges||[]).reduce((a,x)=>a+(x.pledge_payments||[]).reduce((s,y)=>s+ +y.amount,0),0)}))})}
  if(p==='/api/admin/member'){if(!can('members')||!flagOn('members'))return bad('You do not have permission for that.',403);
-  const m=(await sb(env,`members?id=eq.${+b.id||0}`))[0];if(!m||(scope&&!scope.includes(m.branch_id)))return bad('Not found',404);
+  const m=(await dbUse(`members?id=eq.${+b.id||0}`))[0];if(!m||(scope&&!scope.includes(m.branch_id)))return bad('Not found',404);
   if(b.a==='move'){if(scope&&!scope.includes(+b.branch))return bad('You can only move members within your own area.',403);
-   await sb(env,`members?id=eq.${m.id}`,{m:'PATCH',b:{branch_id:+b.branch},prefer:'return=minimal'});
-   await sb(env,`people?member_id=eq.${m.id}`,{m:'PATCH',b:{branch_id:+b.branch},prefer:'return=minimal'});return json({ok:true,message:'Member moved.'})}
-  if(b.a==='reset'){const t=await rpc(env,'member_reset_password',{p_id:m.id});return json({ok:true,message:`Temporary password for this member: ${t} (shown once; they must change it at next login).`})}}
+   await dbUse(`members?id=eq.${m.id}`,{m:'PATCH',b:{branch_id:+b.branch},prefer:'return=minimal'});
+   await dbUse(`people?member_id=eq.${m.id}`,{m:'PATCH',b:{branch_id:+b.branch},prefer:'return=minimal'});await auditDev('admin_move_member','#'+m.id);return json({ok:true,message:'Member moved.'})}
+  if(b.a==='reset'){const t=isDev?await devRpc(env,devJwt,'dev_reset_member_password',{p_id:m.id}):await rpc(env,'member_reset_password',{p_id:m.id});await auditDev('admin_reset_member','#'+m.id);return json({ok:true,message:`Temporary password for this member: ${t} (shown once; they must change it at next login).`})}}
  if(p==='/api/admin/content'){if(!can('events')&&!can('programs'))return bad('You do not have permission for that.',403);
-  const [ev,pr]=await Promise.all([flagOn('events')?sb(env,'events?order=event_date.desc'):Promise.resolve([]),flagOn('programs')?sb(env,'programs?select=*,pledges(amount,pledge_payments(amount))&order=id.desc'):Promise.resolve([])]);
+  const [ev,pr]=await Promise.all([flagOn('events')?dbUse('events?order=event_date.desc'):Promise.resolve([]),flagOn('programs')?dbUse('programs?select=*,pledges(amount,pledge_payments(amount))&order=id.desc'):Promise.resolve([])]);
   const vis=id=>isSuper||(id!==null&&scope.includes(id));
-  return json({canAll:isSuper,fellowships:units(),events:(ev||[]).filter(e=>vis(e.branch_id)),programs:(pr||[]).filter(g=>vis(g.branch_id)).map(g=>({...g,pledged:(g.pledges||[]).reduce((a,x)=>a+ +x.amount,0),paid:(g.pledges||[]).reduce((a,x)=>a+(x.pledge_payments||[]).reduce((s,y)=>s+ +y.amount,0),0)}))})}
+  return json({canAll:isSuper,fellowships:units(),events:(ev||[]).filter(e=>vis(e.branch_id)),programs:(pr||[]).filter(g=>vis(g.branch_id)).map(g=>({...g,pledged:(g.pledges||[]).reduce((a,x)=>a+ +x.amount,0),paid:(g.pledges||[]).reduce((a,x)=>a+(g.pledge_payments||[]).reduce((s,y)=>s+ +y.amount,0),0)}))})}
  if(p==='/api/admin/event'||p==='/api/admin/program'){const ev=p.endsWith('event');if(!can(ev?'events':'programs')||!flagOn(ev?'events':'programs'))return bad('You do not have permission for that.',403);
-  if(b.a==='delete'){await sb(env,`events?id=eq.${+b.id}`,{m:'DELETE',prefer:'return=minimal'});return json({ok:true,message:'Event deleted.'})}
-  if(b.a==='toggle'){const g=(await sb(env,`programs?id=eq.${+b.id}`))[0];if(!g)return bad('Not found',404);await sb(env,`programs?id=eq.${g.id}`,{m:'PATCH',b:{active:!g.active},prefer:'return=minimal'});return json({ok:true})}
+  const owns=x=>x&&(isSuper||(x.branch_id!==null&&scope.includes(x.branch_id)));
+  if(b.a==='delete'){const e=(await dbUse(`events?id=eq.${+b.id||0}`))[0];if(!owns(e))return bad('Not found',404);await dbUse(`events?id=eq.${e.id}`,{m:'DELETE',prefer:'return=minimal'});await auditDev('admin_delete_event',e.title);return json({ok:true,message:'Event deleted.'})}
+  if(b.a==='toggle'){const g=(await dbUse(`programs?id=eq.${+b.id||0}`))[0];if(!owns(g))return bad('Not found',404);await dbUse(`programs?id=eq.${g.id}`,{m:'PATCH',b:{active:!g.active},prefer:'return=minimal'});await auditDev('admin_toggle_program',g.title);return json({ok:true})}
   const br=b.branch===''||b.branch==null?null:+b.branch;if(br===null&&!isSuper)return bad('Choose the church this is for.');if(br!==null&&scope&&!scope.includes(br))return bad('That church is outside your area.',403);
   const lat=b.lat===''||b.lat==null?null:+b.lat,lng=b.lng===''||b.lng==null?null:+b.lng;if((lat===null)!==(lng===null)||(lat!==null&&!inZambia(lat,lng)))return bad('The location must be a valid point inside Zambia.');
-  if(ev){await sb(env,'events',{m:'POST',b:{branch_id:br,title:b.title.trim(),event_date:b.date,location:b.location.trim(),description:b.description||'',banner:b.banner||null,lat,lng},prefer:'return=minimal'});return json({ok:true,message:'Event published to members.'})}
-  await sb(env,'programs',{m:'POST',b:{branch_id:br,title:b.title.trim(),description:b.description||'',deadline:b.deadline||null,location:b.location||null,banner:b.banner||null,lat,lng,active:true},prefer:'return=minimal'});return json({ok:true,message:'Program added.'})}
- if(p==='/api/admin/assets'){const fs=await featSet();if(!fs.assets||!flagOn('assets'))return bad('The assets feature is switched off.',403);if(!can('assets'))return bad('You do not have permission for that.',403);
+  if(ev){await dbUse('events',{m:'POST',b:{branch_id:br,title:b.title.trim(),event_date:b.date,location:b.location.trim(),description:b.description||'',banner:b.banner||null,lat,lng},prefer:'return=minimal'});await auditDev('admin_add_event',b.title);return json({ok:true,message:'Event published to members.'})}
+  await dbUse('programs',{m:'POST',b:{branch_id:br,title:b.title.trim(),description:b.description||'',deadline:b.deadline||null,location:b.location||null,banner:b.banner||null,lat,lng,active:true},prefer:'return=minimal'});await auditDev('admin_add_program',b.title);return json({ok:true,message:'Program added.'})}
+ if(p==='/api/admin/assets'){const fs=await featSet();if(!isDev&&(!fs.assets||!flagOn('assets')))return bad('The assets feature is switched off.',403);if(!can('assets'))return bad('You do not have permission for that.',403);
   const bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
-  if(!post){const rows=await sb(env,`assets?${scope?`branch_id=in.(${scope.join(',')})&`:''}order=id.desc`);return json({rows:(rows||[]).map(a=>({...a,bn:bnMap[a.branch_id]||''})),units:units()})}
-  if(b.a==='delete'){await sb(env,`assets?id=eq.${+b.id}`,{m:'DELETE',prefer:'return=minimal'});return json({ok:true,message:'Asset removed.'})}
-  await sb(env,'assets',{m:'POST',b:{branch_id:+b.branch,name:b.name.trim(),category:b.category||'',quantity:parseInt(b.quantity||1,10),value:b.value===''||b.value==null?null:+b.value,condition:b.condition,acquired_on:b.acquired_on||null,notes:b.notes||'',created_by:by},prefer:'return=minimal'});
-  return json({ok:true,message:'Asset added.'})}
+  if(!post){const rows=await dbUse(`assets?${scope?`branch_id=in.(${scope.join(',')})&`:''}order=id.desc`);return json({rows:(rows||[]).map(a=>({...a,bn:bnMap[a.branch_id]||''})),units:units()})}
+  if(b.a==='delete'){const a=(await dbUse(`assets?id=eq.${+b.id||0}`))[0];if(!a||(scope&&!scope.includes(a.branch_id)))return bad('Not found',404);await dbUse(`assets?id=eq.${a.id}`,{m:'DELETE',prefer:'return=minimal'});await auditDev('asset_deleted',a.name);return json({ok:true,message:'Asset removed.'})}
+  const br=+b.branch;if(!allB.some(x=>x.id===br)||(scope&&!scope.includes(br)))return bad('Choose a church in your area.');
+  await dbUse('assets',{m:'POST',b:{branch_id:br,name:b.name.trim(),category:b.category||'',quantity:parseInt(b.quantity||1,10),value:b.value===''||b.value==null?null:+b.value,condition:b.condition,acquired_on:b.acquired_on||null,notes:b.notes||'',created_by:by},prefer:'return=minimal'});
+  await auditDev('asset_added',b.name);return json({ok:true,message:'Asset added.'})}
  if(p==='/api/admin/attendance'){if(!can('attendance')||!flagOn('attendance'))return bad('You do not have permission for that.',403);
   const v=await sbAttView(env,scope,null,q),us=units();
   return json({summary:us.map(x=>({id:x.id,name:x.label,members:v.directory.filter(y=>y.branch_id===x.id&&y.kind!=='visitor').length,visitors:v.directory.filter(y=>y.branch_id===x.id&&y.kind==='visitor').length,latest:null})),services:v.services.filter(s=>!+q.branch||String(s.branch_id)===q.branch),present:v.present,people:v.directory,fellowships:us})}
  if(p==='/api/admin/report'){if(!can('reports')||!flagOn('reports'))return bad('You do not have permission for that.',403);return json({rows:await sbReport(env,q,scope),fellowships:units()})}
- if(p==='/api/admin/audit'){if(!can('audit')||!flagOn('audit'))return bad('You do not have permission for that.',403);return json({rows:await sb(env,'audit_log?order=id.desc&limit=300')})}
- if(post&&p==='/api/admin/void'){if(!can('void'))return bad('You do not have permission for that.',403);const m=await rpc(env,'void_offering',{p_id:+b.id||0,p_reason:String(b.reason||''),p_by:tag,p_branch:isSuper?null:me.branch_id});return m==='Entry voided.'?json({ok:true,message:m}):bad(m)}
+ if(p==='/api/admin/audit'){if(!can('audit')||!flagOn('audit'))return bad('You do not have permission for that.',403);
+  const rows=await dbUse('audit_log?order=id.desc&limit=300');
+  if(isSuper)return json({rows});
+  const st=await dbUse('staff?select=username,branch_id');
+  const mine=new Set((st||[]).filter(s=>s.branch_id!=null&&scope.includes(s.branch_id)).map(s=>s.username));
+  return json({rows:(rows||[]).filter(r=>mine.has(String(r.actor||'').split(':')[1]))})}
+ if(post&&p==='/api/admin/void'){if(!can('void'))return bad('You do not have permission for that.',403);
+  if(isDev){const reason=String(b.reason||'').trim();const o=(await devSb(env,devJwt,`offerings?id=eq.${+b.id||0}&voided=eq.false`))[0];
+   if(!o||(scope&&!scope.includes(o.branch_id))||!reason)return bad('Cannot void this entry.');
+   await devSb(env,devJwt,`offerings?id=eq.${o.id}`,{m:'PATCH',b:{voided:true,void_reason:reason.slice(0,255),voided_by:by,voided_at:new Date().toISOString()},prefer:'return=minimal'});
+   const pps=await devSb(env,devJwt,`pledge_payments?offering_id=eq.${o.id}&select=id,amount,pledges(member_id,programs(title))`);
+   for(const x of (pps||[])){await devSb(env,devJwt,`pledge_payments?id=eq.${x.id}`,{m:'DELETE',prefer:'return=minimal'});
+    if(x.pledges)await devSb(env,devJwt,'notifications',{m:'POST',b:{member_id:x.pledges.member_id,message:`A payment of K${Number(x.amount).toFixed(2)} for ${x.pledges.programs?.title||''} was reversed by the church office. Your balance has been restored.`},prefer:'return=minimal'})}
+   await auditDev('void_offering',`#${o.id} - ${reason}`);return json({ok:true,message:'Entry voided.'})}
+  const m=await rpc(env,'void_offering',{p_id:+b.id||0,p_reason:String(b.reason||''),p_by:tag,p_branch:isSuper?null:me.branch_id});return m==='Entry voided.'?json({ok:true,message:m}):bad(m)}
  return bad('Not found',404)}
 
 /* ---- hidden Developer app (/dev/): RLS-enforced via authenticated JWT with khi_role='developer' ---- */
@@ -375,7 +417,7 @@ async function devRoute(req,env,p,q,b,ip){
   await rpc(env,'login_clear',{p_ident:id});
   const jwt=await mkDevJwt(env,devId);
   await devSb(env,jwt,'dev_audit',{m:'POST',b:{dev_id:devId,action:'login',detail:un,ip},prefer:'return=minimal'}).catch(()=>{});
-  return json({ok:true},200,await mkCookie(env,devId,'khd'))}
+  return json({ok:true},200,[await mkCookie(env,devId,'khd'),CLEAR_S])}
 
  const did=await who(env,req,'khd');if(!did)return bad('Not found',404);
  const jwt=await mkDevJwt(env,did);
@@ -384,8 +426,8 @@ async function devRoute(req,env,p,q,b,ip){
  const audit=(action,detail='')=>devSb(env,jwt,'dev_audit',{m:'POST',b:{dev_id:dev.id,action,detail:String(detail||''),ip},prefer:'return=minimal'});
 
  if(p==='/api/dev/me'){
-  const [brs,cat,fl]=await Promise.all([devSb(env,jwt,'branches?select=*&order=is_main.desc,name.asc'),devSb(env,jwt,'feature_catalog?order=kind.asc,key.asc'),devSb(env,jwt,'feature_flags?order=id.asc')]);
-  return json({dev,units:(brs||[]).map(x=>({...x,label:unitLabel(x)})),catalog:cat||[],flags:fl||[]})}
+  const [brs,cat,fl,hasS]=await Promise.all([devSb(env,jwt,'branches?select=*&order=is_main.desc,name.asc'),devSb(env,jwt,'feature_catalog?order=kind.asc,key.asc'),devSb(env,jwt,'feature_flags?order=id.asc'),who(env,req,'khs')]);
+  return json({dev,units:(brs||[]).map(x=>({...x,label:unitLabel(x)})),catalog:cat||[],flags:fl||[]},200,hasS?CLEAR_S:undefined)}
  if(p==='/api/dev/password'&&post){
   await devRpc(env,jwt,'dev_change_password',{p_id:dev.id,p_password:String(b.password||'')});
   await audit('change_password','');return json({ok:true,message:'Developer password updated.'})}
