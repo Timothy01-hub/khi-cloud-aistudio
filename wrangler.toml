@@ -1,0 +1,17 @@
+name = "khi-offering"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[triggers]
+crons = ["*/15 * * * *"]   # pledge reminders + event-day alerts (this also keeps the free Supabase project awake)
+
+[vars]
+SUPABASE_URL = "https://YOUR-PROJECT.supabase.co"
+GEO_ENFORCE = "false"      # set to "true" after testing: Zambia-only + VPN/proxy block
+GEO_FAIL_OPEN = "false"
+# Secrets (never put these in this file): SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, SUPABASE_JWT_SECRET, SESSION_SECRET, PROXYCHECK_KEY

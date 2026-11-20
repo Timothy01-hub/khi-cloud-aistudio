@@ -1,0 +1,11 @@
+import {Routes,Route,Navigate} from 'react-router-dom';
+import {Login,Register,Privacy,Blocked,Home} from './App.jsx';
+import {StaffLogin,SecHome} from './secretary.jsx';
+import {SecAttendance,SecReports} from './attendance.jsx';
+import {AdminHome} from './admin.jsx';
+import {DevGate,DevHome,NotFound} from './dev.jsx';
+const back=<Route path="*" element={<Navigate to="/" replace/>}/>;
+export const MemberRoutes=()=><Routes><Route path="/" element={<Login/>}/><Route path="/register" element={<Register/>}/><Route path="/privacy" element={<Privacy/>}/><Route path="/blocked" element={<Blocked/>}/><Route path="/home" element={<Home/>}/>{back}</Routes>;
+export const SecretaryRoutes=()=><Routes><Route path="/" element={<StaffLogin app="secretary" title="Secretary Sign in"/>}/><Route path="/home" element={<SecHome/>}/><Route path="/attendance" element={<SecAttendance/>}/><Route path="/reports" element={<SecReports/>}/><Route path="/blocked" element={<Blocked/>}/>{back}</Routes>;
+export const AdminRoutes=({app='admin'})=><Routes><Route path="/" element={<StaffLogin app={app} title={app==='superadmin'?'Super Admin Sign in':'Admin Sign in'}/>}/><Route path="/home" element={<AdminHome/>}/><Route path="/blocked" element={<Blocked/>}/>{back}</Routes>;
+export const DevRoutes=()=><Routes><Route path="/" element={<DevGate/>}/><Route path="/home" element={<DevHome/>}/><Route path="*" element={<NotFound/>}/></Routes>;

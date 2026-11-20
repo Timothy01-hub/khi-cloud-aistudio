@@ -1,0 +1,27 @@
+{
+ "name": "khi-offering",
+ "private": true,
+ "type": "module",
+ "scripts": {
+  "dev": "node server.js",
+  "start": "node server.js --prod",
+  "ui": "vite",
+  "build": "vite build",
+  "deploy": "vite build && wrangler deploy",
+  "test": "node test/smoke.mjs && node test/render.mjs && node test/staff.mjs && node test/mock.mjs && node test/preview.mjs && node test/dev-ui.mjs",
+  "preview": "node scripts/build-preview.mjs",
+  "test:sql": "node test/sql.mjs"
+ },
+ "dependencies": {
+  "react": "^18.3.1",
+  "react-dom": "^18.3.1",
+  "react-router-dom": "^6.28.0"
+ },
+ "devDependencies": {
+  "@vitejs/plugin-react": "^4.3.4",
+  "esbuild": "^0.24.0",
+  "jsdom": "^31.0.1",
+  "vite": "^5.4.11",
+  "wrangler": "^4"
+ }
+}

@@ -1,0 +1,15 @@
+Run these files in the Supabase SQL Editor, ONE TIME EACH, in exactly this order:
+
+ 1. schema.sql        tables, safe money functions, locked-down access, 24-hour reminders
+ 2. auth.sql          password hashing + login lockout (inside the database)
+ 3. birthdays.sql     date of birth / marriage date + birthday and anniversary wishes
+ 4. departments.sql   department choice at registration
+ 5. staff.sql         staff accounts + secretary dashboard helpers
+ 6. hierarchy.sql     Super Admin layer: centres/branches/fellowships, admins + privileges,
+                      Leaders (Super Admin only), assets, church profile and features
+ 7. dev.sql           hidden Developer role, feature flags, branding (Super Admin = Apostle Felix Mwamba)
+
+(notify_run_24h.sql is only for a database that already ran an older schema.sql.)
+
+Then create your Super Admin (change the name, username and password):
+  select create_staff('superadmin', null, null, 'Your Name', 'yourusername', 'YourPassword123');
