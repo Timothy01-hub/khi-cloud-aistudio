@@ -117,6 +117,7 @@ export async function api(path,body){
 
 function route(p,q,b,post){
  if(p==='/api/branches')return[...db.branches].sort((x,y)=>y.is_main-x.is_main||x.name.localeCompare(y.name)).map(U);
+ if(p==='/api/mode')return{demo:true};
  if(p==='/api/about')return db.profile;
  if(p==='/api/features')return myFeatures(q.unit?+q.unit:null);
  /* ---------- member ---------- */

@@ -13,7 +13,18 @@ export const Scroll=({children})=><div style={{overflowX:'auto'}}>{children}</di
 export const Kind=({k})=><span className={'tag '+(k==='leader'?'leader':k==='member'?'digital':'physical')}>{k==='leader'?'Leader':k==='member'?'Member':'Visitor'}</span>;
 export const People=({rows,branch,act})=>!rows.length?<p className="muted">No records yet.</p>:<Scroll><table><thead><tr><th>Name</th><th>Type</th><th>Phone</th><th>Address</th>{branch&&<th>Church</th>}{act&&<th/>}</tr></thead><tbody>
  {rows.map(r=><tr key={r.id}><td>{r.full_name}</td><td><Kind k={r.kind}/></td><td>{r.phone||'—'}</td><td>{r.address}</td>{branch&&<td>{r.bn}</td>}{act&&<td>{act(r)}</td>}</tr>)}</tbody></table></Scroll>;
-export const Top=({sub,links=[],onLogout})=><header><div><img src="/shared/logo-mark.jpg" alt=""/><b>{sub}</b></div><nav>{links.map(([to,l])=><Link key={to} to={to}>{l}</Link>)}<a href="#" onClick={e=>{e.preventDefault();onLogout()}}>Log out</a></nav></header>;
+export function BrandLogo({sub,title='Kingdom Heralds International',center=false}){
+ if(center)return <div style={{display:'flex',flexDirection:'column',alignItems:'center',textAlign:'center',gap:'.35rem',marginBottom:'.8rem'}}>
+  <img src="/shared/logo-mark.jpg" alt={title} style={{width:64,height:64,objectFit:'contain',borderRadius:8}}/>
+  <div style={{fontWeight:700,fontSize:'1.05rem',lineHeight:1.2}}>{title}</div>
+  {sub&&<div className="muted" style={{fontSize:'.8rem',lineHeight:1.3}}>{sub}</div>}
+ </div>;
+ return <div style={{display:'inline-flex',alignItems:'center',gap:'.6rem',textAlign:'left'}}>
+  <img src="/shared/logo-mark.jpg" alt={title} style={{height:46,width:'auto',objectFit:'contain',borderRadius:4,margin:0}}/>
+  <div><div style={{fontWeight:700,lineHeight:1.2}}>{title}</div>{sub&&<div className="muted" style={{fontSize:'.8rem',lineHeight:1.25}}>{sub}</div>}</div>
+ </div>;
+}
+export const Top=({sub,links=[],onLogout})=><header><BrandLogo sub={sub}/><nav>{links.map(([to,l])=><Link key={to} to={to}>{l}</Link>)}<a href="#" onClick={e=>{e.preventDefault();onLogout()}}>Log out</a></nav></header>;
 export function useLogout(){const nav=useNavigate();return async()=>{await api('/api/staff/logout',{}).catch(()=>{});nav('/')}}
 export function useData(path){const nav=useNavigate(),[d,setD]=useState(null),[err,setErr]=useState('');
  const load=useCallback(async()=>{try{setD(await api(path));setErr('')}catch(x){x.status===401?nav('/'):setErr(x.message)}},[path,nav]);

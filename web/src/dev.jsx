@@ -1,7 +1,7 @@
 import {useCallback,useEffect,useState} from 'react';
 import {useNavigate,useSearchParams} from 'react-router-dom';
 import {api} from './api.js';
-import {Msg,Scroll,Loading,useAct} from './ui.jsx';
+import {BrandLogo,Msg,Scroll,Loading,useAct} from './ui.jsx';
 
 const small={padding:'.2rem .6rem',width:'auto'};
 const taStyle={width:'100%',minHeight:84,padding:'.7rem',margin:'.3rem 0',borderRadius:8,border:'1px solid var(--line)',background:'#0f0b3f',color:'var(--tx)',font:'inherit',fontFamily:'monospace',fontSize:'.85rem'};
@@ -18,7 +18,7 @@ export function DevGate(){
  if(mode==='404')return <NotFound/>;
  const submit=async ev=>{ev.preventDefault();const f=new FormData(ev.target);setE('');
   try{await api('/api/dev/login',{username:f.get('username'),password:f.get('password')});nav('/home')}catch(x){setE(x.message)}};
- return <form onSubmit={submit} className="card login-box"><img src="/shared/logo.jpg" className="logo" alt="Kingdom Heralds International"/><h2>Developer Sign in</h2>{e&&<p className="err">{e}</p>}
+ return <form onSubmit={submit} className="card login-box"><BrandLogo center sub="Developer"/><h2>Developer Sign in</h2>{e&&<p className="err">{e}</p>}
   <input name="username" placeholder="Username" required autoFocus/><input name="password" type="password" placeholder="Password" required/><button>Sign in</button></form>;
 }
 
@@ -198,7 +198,7 @@ export function DevHome(){
  if(!me)return <p className="muted" style={{padding:'2rem'}}>Loading…</p>;
  const tab=TABS.some(t=>t[0]===sp.get('p'))?sp.get('p'):'flags';
  const logout=async()=>{await api('/api/dev/logout',{}).catch(()=>{});nav('/')};
- return <><header><div><img src="/shared/logo-mark.jpg" alt=""/><b>Developer</b> <span className="muted">· {me.dev.full_name}</span></div>
+ return <><header><div style={{display:'flex',alignItems:'center',gap:'.6rem',flexWrap:'wrap'}}><BrandLogo sub="Developer"/> <span className="muted">· {me.dev.full_name}</span></div>
   <nav>{TABS.map(([k,l])=><a key={k} href="#" className={tab===k?'on':''} onClick={e=>{e.preventDefault();setSp({p:k})}}>{l}</a>)}<a href="#" onClick={e=>{e.preventDefault();logout()}}>Log out</a></nav></header>
   <main key={tab}>{tab==='flags'&&<FlagsTab units={me.units}/>}{tab==='users'&&<UsersTab/>}{tab==='settings'&&<SettingsTab/>}{tab==='data'&&<DataTab/>}</main></>;
 }

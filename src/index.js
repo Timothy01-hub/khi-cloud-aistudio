@@ -80,6 +80,7 @@ async function route(req,env,p,q){
  if(p.startsWith('/api/staff/'))return staffRoute(req,env,p,q,b,ip);
  if(p.startsWith('/api/admin/'))return adminRoute(req,env,p,q,b,ip);
  if(p==='/api/branches'){const bs=await sb(env,'branches?select=*&order=is_main.desc,name.asc');return json((bs||[]).map(x=>({...x,label:unitLabel(x)})))}
+ if(p==='/api/mode')return json({demo:false});
  if(p==='/api/features')return json(await myFeats(env,q.unit?+q.unit:null));
  if(p==='/api/about'){const s=(await sb(env,"settings?key=eq.profile&select=value").catch(()=>[]))[0];return json(s?.value||{vision:'To reach all nations for Christ',mission:"Raising true Christians who will impact nations with God's kingdom.",founded:2015,email:'kingdomheralds.info@gmail.com'})}
  if(p==='/api/departments')return json(await featOn(env,'feature.departments',q.unit?+q.unit:null)?DEPTS:[]);

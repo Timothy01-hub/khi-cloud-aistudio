@@ -1,6 +1,7 @@
 import {useCallback,useEffect,useState} from 'react';
 import {Link,useNavigate} from 'react-router-dom';
 import {api} from './api.js';
+import {BrandLogo} from './ui.jsx';
 
 const money=n=>'K '+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const when=t=>new Date(t).toLocaleString('en-GB',{timeZone:'Africa/Lusaka',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
@@ -11,7 +12,7 @@ const CATS=['Offering','Tithe','Seed','Thanksgiving','Building Fund'];
 export function StaffLogin({app,title}){useLoginBody();const nav=useNavigate(),[e,setE]=useState('');
  const submit=async ev=>{ev.preventDefault();const f=new FormData(ev.target);setE('');
   try{await api('/api/staff/login',{username:f.get('username'),password:f.get('password'),app});nav('/home')}catch(x){setE(x.message)}};
- return <form onSubmit={submit} className="card login-box"><img src="/shared/logo.jpg" className="logo" alt="Kingdom Heralds International"/><h2>{title}</h2>{e&&<p className="err">{e}</p>}
+ return <form onSubmit={submit} className="card login-box">{app==='superadmin'?<BrandLogo center title="KINGDOM HERALDS INTERNATIONAL CHURCH"/>:<BrandLogo center sub="Raising True Christians who Impact Nations with God's Kingdom"/>}<h2>{title}</h2>{e&&<p className="err">{e}</p>}
   <input name="username" placeholder="Username" required autoFocus/><input name="password" type="password" placeholder="Password" required/><button>Sign in</button>
   <p><Install text="⬇ Install this app"/></p><p className="muted">Forgot password? Contact the Super Admin.</p></form>}
 
@@ -34,7 +35,7 @@ function PledgePay({owing,act}){
 
 export function SecView({d,msg,act,onLogout}){
  const voidIt=id=>{const reason=window.prompt('Reason for voiding this entry? (required)');if(reason)act('/api/staff/void',{id,reason})};
- return <><header><div><img src="/shared/logo-mark.jpg" alt=""/><b>{d.me.brand||d.me.branch}</b> <span className="muted">· {d.me.name} ({d.me.slot==='main'?'Main Secretary':'Assistant'})</span></div>
+ return <><header><div style={{display:'flex',alignItems:'center',gap:'.6rem',flexWrap:'wrap'}}><BrandLogo sub={d.me.brand||d.me.branch}/> <span className="muted">· {d.me.name} ({d.me.slot==='main'?'Main Secretary':'Assistant'})</span></div>
   <nav>{d.features?.['secretary.menu.attendance']!==false&&<Link to="/attendance">Attendance</Link>}{d.me.canVoid&&d.features?.['secretary.menu.reports']!==false&&<Link to="/reports">Reports</Link>}<Install text="⬇ Install app"/><a href="#" onClick={e=>{e.preventDefault();onLogout()}}>Log out</a></nav></header>
  <main>{msg&&<p className={msg.startsWith('Error')?'err':'ok'}>{msg}</p>}
   <CashForm act={act}/><PledgePay owing={d.owing} act={act}/>

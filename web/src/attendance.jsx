@@ -11,7 +11,7 @@ export function SecAttendance(){
  if(!d)return <Loading err={err}/>;
  const c=d.current,s=g('s'),vals=e=>{e.preventDefault();return Object.fromEntries(new FormData(e.currentTarget))},edit=d.directory.concat(d.present).find(p=>String(p.id)===g('edit'));
  const small={padding:'.2rem .6rem',width:'auto'};
- return <><Top sub={`${d.me.brand||d.me.branch} · Attendance`} links={[['/home','Dashboard'],...(d.features?.['secretary.menu.attendance']!==false?[['/attendance','Attendance']]:[]),...(d.me.slot==='main'&&d.features?.['secretary.menu.reports']!==false?[['/reports','Reports']]:[])]} onLogout={logout}/>
+ return <><Top sub={d.me.brand||d.me.branch} links={[['/home','Dashboard'],...(d.features?.['secretary.menu.attendance']!==false?[['/attendance','Attendance']]:[]),...(d.me.slot==='main'&&d.features?.['secretary.menu.reports']!==false?[['/reports','Reports']]:[])]} onLogout={logout}/>
  <main><Msg m={msg||(err&&'Error: '+err)}/>
   <form className="card" onSubmit={async e=>{const x=vals(e),r=await act('/api/staff/att',{a:'start',...x});if(r?.id)set('s',r.id)}}><h3>Start or open a service</h3>
    <div className="grid"><input type="date" name="date" defaultValue={today()} required/><select name="type">{d.types.map(t=><option key={t}>{t}</option>)}</select></div><button>Start / open service</button></form>
@@ -39,4 +39,4 @@ export function SecAttendance(){
 export function SecReports(){const logout=useLogout(),[info,setInfo]=useState(null);
  useEffect(()=>{api('/api/staff/home').then(setInfo).catch(()=>{})},[]);
  const brand=info?.me?.brand||info?.me?.branch,attOn=info?.features?.['secretary.menu.attendance']!==false;
- return <><Top sub={brand?`${brand} · Reports`:'Reports'} links={[['/home','Dashboard'],...(attOn?[['/attendance','Attendance']]:[])]} onLogout={logout}/><main><Reports base="/api/staff"/></main></>}
+ return <><Top sub={brand} links={[['/home','Dashboard'],...(attOn?[['/attendance','Attendance']]:[])]} onLogout={logout}/><main><Reports base="/api/staff"/></main></>}

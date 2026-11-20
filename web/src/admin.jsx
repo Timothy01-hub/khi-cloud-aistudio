@@ -1,6 +1,6 @@
 import {useEffect,useState} from 'react';
 import {useSearchParams} from 'react-router-dom';
-import {Msg,Stats,Scroll,People,Loading,useData,useAct,useLogout,money,when,day,readImage,Pin} from './ui.jsx';
+import {BrandLogo,Msg,Stats,Scroll,People,Loading,useData,useAct,useLogout,money,when,day,readImage,Pin} from './ui.jsx';
 import {Reports} from './reports.jsx';
 const small={padding:'.2rem .6rem',width:'auto'};
 
@@ -122,6 +122,6 @@ export function AdminHome(){const [sp,setSp]=useSearchParams(),logout=useLogout(
  if(!me)return <Loading err={err}/>;
  const tab=me.tabs.includes(sp.get('p'))?sp.get('p'):(me.tabs[0]||'overview');
  const C={overview:<Overview/>,units:<Units/>,admins:<Admins/>,leaders:<Leaders/>,accounts:<Accounts/>,members:<Members/>,events:<Content which="events"/>,programs:<Content which="programs"/>,attendance:<AdminAtt/>,reports:<Reports base="/api/admin" admin/>,assets:<Assets/>,audit:<Audit/>,profile:<Profile onChange={reloadMe}/>};
- return <><header><div><img src="/shared/logo-mark.jpg" alt=""/>{me.role==='superadmin'?<b>KINGDOM HERALDS INTERNATIONAL CHURCH</b>:<><b>{me.brand||me.unit}</b> <span className="muted">· {me.name}</span></>}</div>
+ return <><header>{me.role==='superadmin'?<BrandLogo title="KINGDOM HERALDS INTERNATIONAL CHURCH"/>:<div style={{display:'flex',alignItems:'center',gap:'.6rem',flexWrap:'wrap'}}><BrandLogo sub={me.brand||me.unit}/> <span className="muted">· {me.name}</span></div>}
   <nav>{me.tabs.map(k=><a key={k} href="#" className={tab===k?'on':''} onClick={e=>{e.preventDefault();setSp({p:k})}}>{LABEL[k]}</a>)}<a href="#" onClick={e=>{e.preventDefault();logout()}}>Log out</a></nav></header>
  <main key={tab}>{C[tab]}</main></>}
