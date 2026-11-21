@@ -70,7 +70,7 @@ let dv=boot('/dev/');
 ok('/dev/: Developer Sign in opens when no other role signed in',await dv.until(()=>dv.t().includes('Developer Sign in')));
 dv.fill('Username','timothy');dv.fill('Password','demo1234');dv.submit(dv.form('Developer Sign in'));await finishOtp(dv);
 ok('/dev/: Timothy logs into Developer console with all tabs',await dv.until(()=>dv.t().includes('Developer · Timothy')&&['Flags & Stubs','Users & Roles','Settings & Units','Data'].every(x=>dv.btn(x))));
-ok('/dev/: future stubs are listed and OFF by default',dv.t().includes('SMS notifications')&&dv.t().includes('Mobile-money payments')&&dv.t().includes('Backups and data export')&&dv.t().includes('Multi-language')&&dv.t().includes('API keys')&&dv.t().includes('Payments reports'));
+ok('/dev/: future stubs are listed and OFF by default',await dv.until(()=>dv.t().includes('SMS notifications')&&dv.t().includes('Mobile-money payments')&&dv.t().includes('Backups and data export')&&dv.t().includes('Multi-language')&&dv.t().includes('API keys')&&dv.t().includes('Payments reports')));
 
 // Toggle a stub ON via UI
 const smsRow=dv.qa('tr').find(r=>r.textContent.includes('SMS notifications'));

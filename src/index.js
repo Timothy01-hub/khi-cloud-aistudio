@@ -13,8 +13,9 @@ const DEPTS=['Ushering','Intercessory','Media','Protocol','Hospitality','Praise 
 const KW={center:'Centre',branch:'Branch',fellowship:'Fellowship'};
 const unitLabel=b=>{if(!b)return'';const k=KW[b.kind]||'Fellowship',n=String(b.name||''),u=n.toUpperCase(),w=k.toUpperCase();return!b.kind||u.endsWith(w)||(b.kind==='center'&&u.endsWith('CENTER'))?n:n+' '+k};
 const inZambia=(a,b)=>a>=-18.08&&a<=-8.22&&b>=21.99&&b<=33.71;
-const GRANT=[['accounts','Manage secretary accounts'],['members','Manage members (move, reset passwords)'],['events','Post events'],['programs','Manage pledge programs'],['attendance','View attendance'],['reports','View reports and downloads'],['void','Void and edit entries'],['audit','View the audit log'],['assets','Manage church assets (when the feature is on)'],['expenses','Log and review branch expenses']];
+const GRANT=[['accounts','Manage secretary accounts'],['members','Manage members (move, reset passwords)'],['events','Post events'],['programs','Manage pledge programs'],['attendance','View attendance'],['reports','View reports and downloads'],['void','Void and edit entries'],['audit','View the audit log'],['assets','Manage church assets (when the feature is on)'],['expenses','Log and review branch expenses'],['announcements','Post branch announcements'],['budgets','Set branch budgets']];
 const BLOCK=[['units','Add or edit centres, branches and fellowships'],['admins','Create admins or change their privileges'],['leaders','Promote or demote Leaders'],['features','Switch features on or off'],['profile','Edit the vision, mission and church profile']];
+const EXP_CATS=['Utilities','Welfare','Maintenance','Transport','Supplies','Ministry Event','Equipment','Other'];
 const kidsOf=(all,id)=>{const out=[id];for(const b of all)if(b.parent_id===id)out.push(...kidsOf(all,b.id));return out};
 const randOtp=()=>{const a=new Uint32Array(1);crypto.getRandomValues(a);return String(100000+(a[0]%900000))};
 const maskEmail=e=>{const s=String(e||'').trim();const i=s.indexOf('@');if(i<2)return s?s[0]+'***'+(i>=0?s.slice(i):''):'church office email';return s[0]+'***'+s.slice(i-1)};
@@ -129,17 +130,21 @@ async function route(req,env,p,q){
  const fOn=k=>feats[k]!==false;
  if(p==='/api/member/count')return json({unread:fOn('member.menu.alerts')?(await sb(env,`notifications?member_id=eq.${mid}&is_read=eq.false&select=id`)).length:0});
  if(p==='/api/member/home'&&!post){
-  const [events,programs,pl,pe,un,br]=await Promise.all([
+  const [events,programs,pl,pe,un,br,anns,brs]=await Promise.all([
    fOn('member.menu.events')?sb(env,`events?event_date=gte.${D}&or=(branch_id.is.null,branch_id.eq.${B})&order=event_date.asc`):Promise.resolve([]),
    fOn('member.menu.pledges')?sb(env,`programs?${wherePrograms(B,D)}&order=id.desc`):Promise.resolve([]),
    fOn('member.menu.pledges')?sb(env,`pledges?member_id=eq.${mid}&select=id,amount,programs(title),pledge_payments(amount)&order=id.desc`):Promise.resolve([]),
    sb(env,`people?member_id=eq.${mid}&select=id`),
    fOn('member.menu.alerts')?sb(env,`notifications?member_id=eq.${mid}&is_read=eq.false&select=id`):Promise.resolve([]),
-   brandOf(env,B,me.branches.name)]);
+   brandOf(env,B,me.branches.name),
+   fOn('feature.announcements')?sb(env,`announcements?or=(branch_id.is.null,branch_id.eq.${B})&or=(expires_at.is.null,expires_at.gte.${D})&order=id.desc`).catch(()=>[]):Promise.resolve([]),
+   fOn('feature.announcements')?sb(env,'branches?select=id,name,kind').catch(()=>[]):Promise.resolve([])]);
+  const bnMap=Object.fromEntries((brs||[]).map(x=>[x.id,unitLabel(x)]));
   let services=[];
   if(pe[0]&&fOn('feature.self_checkin')){const sv=await sb(env,`services?branch_id=eq.${B}&service_date=eq.${D}&is_open=eq.true`);
    if(sv.length){const at=await sb(env,`attendance?person_id=eq.${pe[0].id}&service_id=in.(${sv.map(s=>s.id).join(',')})&select=service_id`),h=new Set(at.map(a=>a.service_id));services=sv.map(s=>({id:s.id,type:s.service_type,here:h.has(s.id)}))}}
   return json({me:{name:me.full_name,branch:br.branch,centre:br.centre,brand:br.brand,mustChange:me.must_change},today:D,events,programs,services,unread:un.length,features:feats,
+   announcements:(anns||[]).map(a=>({...a,branch_label:a.branch_id?(bnMap[a.branch_id]||br.branch):'All branches'})),
    pledges:pl.map(x=>({id:x.id,title:x.programs.title,amount:+x.amount,paid:x.pledge_payments.reduce((a,y)=>a+Number(y.amount),0)}))})}
  if(p==='/api/member/alerts'&&!post){
   if(!fOn('member.menu.alerts'))return bad('Alerts are currently disabled.',403);
@@ -247,8 +252,13 @@ async function staffRoute(req,env,p,q,b,ip){
  const getThreshold=async()=>{const s=(await sb(env,"settings?key=eq.approval_threshold&select=value").catch(()=>[]))[0];const n=Number(s?.value?.amount);return Number.isFinite(n)&&n>=0?n:500};
  if(p==='/api/staff/feed')return json(await feed());
  if(p==='/api/staff/home'&&!post){
-  const [fd,ow,br,thr,reqs]=await Promise.all([feed(),rpc(env,'owing_pledges',{p_branch:B}),brandOf(env,B,me.branches.name),getThreshold(),me.slot==='main'&&fOn('feature.two_step_approval')?sb(env,`approval_requests?branch_id=eq.${B}&status=eq.pending&order=id.desc`).catch(()=>[]):Promise.resolve([])]);
+  const D=today();
+  const [fd,ow,br,thr,reqs,anns,brs]=await Promise.all([feed(),rpc(env,'owing_pledges',{p_branch:B}),brandOf(env,B,me.branches.name),getThreshold(),me.slot==='main'&&fOn('feature.two_step_approval')?sb(env,`approval_requests?branch_id=eq.${B}&status=eq.pending&order=id.desc`).catch(()=>[]):Promise.resolve([]),
+   fOn('feature.announcements')?sb(env,`announcements?or=(branch_id.is.null,branch_id.eq.${B})&or=(expires_at.is.null,expires_at.gte.${D})&order=id.desc`).catch(()=>[]):Promise.resolve([]),
+   fOn('feature.announcements')?sb(env,'branches?select=id,name,kind').catch(()=>[]):Promise.resolve([])]);
+  const bnMap=Object.fromEntries((brs||[]).map(x=>[x.id,unitLabel(x)]));
   return json({me:{name:me.full_name,branch:br.branch,centre:br.centre,brand:br.brand,slot:me.slot,canVoid:me.slot==='main'},features:feats,threshold:thr,
+   announcements:(anns||[]).map(a=>({...a,branch_label:a.branch_id?(bnMap[a.branch_id]||br.branch):'All branches'})),
    approvals:(reqs||[]).map(r=>({...r,isMine:r.requested_by===tag||(r.requested_by_staff_id!=null&&r.requested_by_staff_id===me.id)})),...fd,owing:ow})}
  if(p==='/api/staff/receipt'&&!post){
   if(!fOn('feature.receipts'))return bad('Receipts are currently disabled.',403);
@@ -328,7 +338,7 @@ async function staffRoute(req,env,p,q,b,ip){
   if(me.slot!=='main')return bad('Only the Main Secretary can open reports.',403);
   if(!fOn('secretary.menu.reports'))return bad('Reports are currently disabled.',403);
   const br=await brandOf(env,B,me.branches.name);
-  return json({rows:await sbReport(env,q,[B]),me:{branch:br.branch,brand:br.brand}})}
+  return json({rows:await sbReport(env,q,[B]),me:{branch:br.branch,brand:br.brand},features:{'feature.exports':fOn('feature.exports')}})}
  return bad('Not found',404)}
 
 /* ---- shared Supabase attendance + report helpers ---- */
@@ -380,9 +390,32 @@ async function sbAttAct(env,B,by,b){
   await sb(env,`people?id=eq.${p.id}`,{m:'PATCH',b:{kind:'member'},prefer:'return=minimal'});return{ok:true,message:p.full_name+' is now a member.'}}
  throw Object.assign(new Error('Not found'),{status:404})}
 
+async function sbBudgetVsActual(env,yr,scopeIds,fb=0,dbUse=sb){
+ const inB=id=>(!scopeIds||scopeIds.includes(id))&&(!fb||id===fb);
+ const [buds,exps,brs]=await Promise.all([
+  dbUse(`branch_budgets?budget_year=eq.${yr}&order=branch_id.asc,category.asc`).catch(()=>[]),
+  dbUse('expenses?status=eq.approved&order=id.desc').catch(()=>[]),
+  dbUse('branches?select=id,name,kind')]);
+ const bn=Object.fromEntries((brs||[]).map(x=>[x.id,unitLabel(x)]));
+ const spent=new Map();
+ for(const e of (exps||[])){
+  if(!String(e.expense_date||'').startsWith(String(yr)))continue;
+  const k=e.branch_id+'|'+String(e.category||'').trim().toLowerCase();
+  spent.set(k,(spent.get(k)||0)+Number(e.amount||0));
+ }
+ return(buds||[]).filter(b=>inB(b.branch_id)).map(b=>{
+  const bud=+b.amount||0,k=b.branch_id+'|'+String(b.category||'').trim().toLowerCase(),act=Math.round((spent.get(k)||0)*100)/100;
+  const pct=bud>0?Math.round((act/bud)*1000)/10:(act>0?100:0);
+  const warn=bud>0?(act/bud)*100>90:act>0;
+  return{id:b.id,branch_id:b.branch_id,Year:b.budget_year,Branch:bn[b.branch_id]||'',Category:b.category,Budget:bud,Actual:act,Remaining:Math.round((bud-act)*100)/100,Pct_Used:pct,Status:warn?'WARNING (>90%)':'OK',warning:warn}})}
+
 async function sbReport(env,f,scopeIds,dbUse=sb){
  const fb=+f.branch||0,inB=id=>(!scopeIds||scopeIds.includes(id))&&(!fb||id===fb),brs=await dbUse('branches?select=id,name,kind');
  const bn=Object.fromEntries((brs||[]).map(x=>[x.id,unitLabel(x)])),k=f.kind;
+ if(k==='budgets'){
+  const yr=/^\d{4}$/.test(String(f.year||''))?+f.year:+((f.to||f.from||today()).slice(0,4));
+  const rows=await sbBudgetVsActual(env,yr,scopeIds,fb,dbUse);
+  return rows.map(({Year,Branch,Category,Budget,Actual,Remaining,Pct_Used,Status})=>({Year,Branch,Category,Budget,Actual,Remaining,Pct_Used,Status}))}
  if(k==='financial'){
   const from=okDate(f.from||'')?f.from:'1900-01-01',to=okDate(f.to||'')?f.to:'2999-12-31';
   const [off,exp]=await Promise.all([dbUse('offerings?order=id.desc'),dbUse('expenses?order=id.desc').catch(()=>[])]);
@@ -432,7 +465,7 @@ async function adminRoute(req,env,p,q,b,ip){
  const lockedSet=async()=>{try{const rows=isDev?await devRpc(env,devJwt,'dev_locked_idents',{}):await rpc(env,'locked_idents',{});return new Set((rows||[]).map(x=>x.ident))}catch{return new Set()}};
  if(p==='/api/admin/me'){
   const fs=await featSet();
-  const tabs=['overview',...(isSuper?['units','admins','leaders']:[]),...(can('accounts')&&flagOn('accounts')?['accounts']:[]),...(can('members')&&flagOn('members')?['members']:[]),...(can('events')&&flagOn('events')?['events']:[]),...(can('programs')&&flagOn('programs')?['programs']:[]),...(can('expenses')&&v2On('expenses')?['expenses']:[]),...(can('void')&&v2On('two_step_approval')?['approvals']:[]),...(can('attendance')&&flagOn('attendance')?['attendance']:[]),...(can('reports')&&flagOn('reports')?['reports']:[]),...((isDev||fs.assets)&&can('assets')&&flagOn('assets')?['assets']:[]),...(can('audit')&&flagOn('audit')?['audit']:[]),...(isSuper?['profile']:[])];
+  const tabs=['overview',...(isSuper?['units','admins','leaders']:[]),...(can('accounts')&&flagOn('accounts')?['accounts']:[]),...(can('members')&&flagOn('members')?['members']:[]),...(can('events')&&flagOn('events')?['events']:[]),...(can('programs')&&flagOn('programs')?['programs']:[]),...(can('announcements')&&v2On('announcements')?['announcements']:[]),...(can('expenses')&&v2On('expenses')?['expenses']:[]),...(can('budgets')&&v2On('budgets')?['budgets']:[]),...(can('void')&&v2On('two_step_approval')?['approvals']:[]),...(can('attendance')&&flagOn('attendance')?['attendance']:[]),...(can('reports')&&flagOn('reports')?['reports']:[]),...((isDev||fs.assets)&&can('assets')&&flagOn('assets')?['assets']:[]),...(can('audit')&&flagOn('audit')?['audit']:[]),...(isSuper?['profile']:[])];
   const br=isSuper?{brand:'KINGDOM HERALDS INTERNATIONAL CHURCH'}:await brandOf(env,me.branch_id,me.branches?.name||'');
   return json({role:me.role,is_dev:isDev,name:me.full_name,tabs,unit:isSuper?'KINGDOM HERALDS INTERNATIONAL CHURCH':br.branch,brand:br.brand,privileges:me.privileges||[],features:feats,canVoid:can('void')})}
  if(p==='/api/admin/overview'){
@@ -589,10 +622,67 @@ async function adminRoute(req,env,p,q,b,ip){
   const v=await sbAttView(env,scope,null,q),us=units();
   return json({summary:us.map(x=>({id:x.id,name:x.label,members:v.directory.filter(y=>y.branch_id===x.id&&y.kind!=='visitor').length,visitors:v.directory.filter(y=>y.branch_id===x.id&&y.kind==='visitor').length,latest:null})),services:v.services.filter(s=>!+q.branch||String(s.branch_id)===q.branch),present:v.present,people:v.directory,fellowships:us})}
  if(p==='/api/admin/report'){if(!can('reports')||!flagOn('reports'))return bad('You do not have permission for that.',403);
+  if(q.kind==='budgets'&&!v2On('budgets'))return bad('Branch budgets are currently disabled.',403);
   const rows=await sbReport(env,q,scope,dbUse);
-  let financial=null;
+  let financial=null,budgets=null;
   if(v2On('expenses')){const fin=await sbReport(env,{...q,kind:'financial'},scope,dbUse);financial={branches:fin.slice(0,-1),churchWide:fin.at(-1)||null}}
-  return json({rows,financial,fellowships:units()})}
+  if(v2On('budgets')){const yr=/^\d{4}$/.test(String(q.year||''))?+q.year:+((q.to||q.from||today()).slice(0,4));budgets={year:yr,rows:await sbBudgetVsActual(env,yr,scope,+q.branch||0,dbUse)}}
+  return json({rows,financial,budgets,fellowships:units(),features:{'feature.exports':v2On('exports'),'feature.budgets':v2On('budgets')}})}
+ if(p==='/api/admin/announcements'){
+  if(!can('announcements')||!v2On('announcements'))return bad('You do not have permission for that.',403);
+  const bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
+  const owns=a=>a&&(isSuper||(a.branch_id!==null&&scope.includes(a.branch_id)));
+  if(!post){
+   const [rows,D]=[await dbUse('announcements?order=id.desc&limit=200').catch(()=>[]),today()];
+   return json({canAll:isSuper,units:units(),announcements:(rows||[]).filter(owns).map(a=>({...a,branch_label:a.branch_id?bnMap[a.branch_id]||'':'All branches',active:!a.expires_at||a.expires_at>=D}))})}
+  if(b.a==='add'||b.a==='edit'){
+   const title=String(b.title||'').trim().slice(0,140),bodyTxt=String(b.body||'').trim().slice(0,2000),exp=String(b.expires_at||'').trim()||null;
+   if(!title||!bodyTxt)return bad('Title and body are required.');
+   if(exp&&!okDate(exp))return bad('Choose a valid expiry date.');
+   const br=b.branch===''||b.branch==null?null:+b.branch;
+   if(br===null&&!isSuper)return bad('Choose a branch in your area.',403);
+   if(br!==null&&(!allB.some(x=>x.id===br)||(scope&&!scope.includes(br))))return bad('That church is outside your area.',403);
+   if(b.a==='add'){
+    const ins=(await dbUse('announcements',{m:'POST',b:{branch_id:br,title,body:bodyTxt,expires_at:exp,created_by:tag,created_by_staff_id:isDev?null:me.id,created_by_dev_id:isDev?devUser.id:null},prefer:'return=representation'}))?.[0]||null;
+    await auditStaff('announcement_add',`${br?bnMap[br]:'All branches'}: ${title}`);
+    return json({ok:true,id:ins?.id,message:'Announcement posted.'})}
+   const ex=(await dbUse(`announcements?id=eq.${+b.id||0}`))[0];
+   if(!ex)return bad('Announcement not found.',404);
+   if(!owns(ex))return bad('You cannot edit an announcement outside your scope.',403);
+   await dbUse(`announcements?id=eq.${ex.id}`,{m:'PATCH',b:{branch_id:br,title,body:bodyTxt,expires_at:exp,updated_at:new Date().toISOString()},prefer:'return=minimal'});
+   await auditStaff('announcement_edit',`#${ex.id} ${title}`);
+   return json({ok:true,message:'Announcement updated.'})}
+  if(b.a==='delete'){
+   const ex=(await dbUse(`announcements?id=eq.${+b.id||0}`))[0];
+   if(!ex)return bad('Announcement not found.',404);
+   if(!owns(ex))return bad('You cannot delete an announcement outside your scope.',403);
+   await dbUse(`announcements?id=eq.${ex.id}`,{m:'DELETE',prefer:'return=minimal'});
+   await auditStaff('announcement_delete',`#${ex.id} ${ex.title}`);
+   return json({ok:true,message:'Announcement deleted.'})}
+  return bad('Bad request')}
+ if(p==='/api/admin/budgets'){
+  if(!can('budgets')||!v2On('budgets'))return bad('You do not have permission for that.',403);
+  const bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
+  if(!post){
+   const yr=/^\d{4}$/.test(String(q.year||''))?+q.year:+today().slice(0,4);
+   return json({year:yr,categories:EXP_CATS,units:units(),rows:await sbBudgetVsActual(env,yr,scope,0,dbUse)})}
+  if(b.a==='save'){
+   const br=+b.branch,yr=+b.budget_year,cat=String(b.category||'').trim().slice(0,60),amt=Math.round(parseFloat(b.amount)*100)/100;
+   if(!allB.some(x=>x.id===br)||(scope&&!scope.includes(br)))return bad('Choose a church in your area.',403);
+   if(!Number.isInteger(yr)||yr<2000||yr>2100)return bad('Enter a valid budget year.');
+   if(!cat)return bad('Category is required.');
+   if(!(amt>=0&&amt<1e8))return bad('Enter a valid budget amount.');
+   await dbUse('branch_budgets?on_conflict=branch_id,budget_year,category',{m:'POST',b:{branch_id:br,budget_year:yr,category:cat,amount:amt,updated_by:tag,updated_at:new Date().toISOString()},prefer:'resolution=merge-duplicates,return=minimal'});
+   await auditStaff('budget_save',`${bnMap[br]||br} ${yr} ${cat}: ${money(amt)}`);
+   return json({ok:true,message:'Budget saved.'})}
+  if(b.a==='delete'){
+   const ex=(await dbUse(`branch_budgets?id=eq.${+b.id||0}`))[0];
+   if(!ex)return bad('Budget not found.',404);
+   if(scope&&!scope.includes(ex.branch_id))return bad('That church is outside your area.',403);
+   await dbUse(`branch_budgets?id=eq.${ex.id}`,{m:'DELETE',prefer:'return=minimal'});
+   await auditStaff('budget_delete',`#${ex.id} ${bnMap[ex.branch_id]||ex.branch_id} ${ex.budget_year} ${ex.category}`);
+   return json({ok:true,message:'Budget removed.'})}
+  return bad('Bad request')}
  if(p==='/api/admin/audit'){if(!can('audit')||!flagOn('audit'))return bad('You do not have permission for that.',403);
   const rows=await dbUse('audit_log?order=id.desc&limit=300');
   if(isSuper)return json({rows});
@@ -767,7 +857,7 @@ async function devRoute(req,env,p,q,b,ip){
    if(b.a==='create'){await devSb(env,jwt,'branches',{m:'POST',b:{name:String(b.name||'').trim(),kind:b.kind||'fellowship',parent_id:b.parent_id?+b.parent_id:null,is_main:!!b.is_main,momo_number:b.momo_number||null},prefer:'return=minimal'});await audit('create_unit',b.name);return json({ok:true,message:'Unit added.'})}
    if(b.a==='update'){await devSb(env,jwt,`branches?id=eq.${+b.id}`,{m:'PATCH',b:{name:String(b.name||'').trim(),kind:b.kind,parent_id:b.parent_id?+b.parent_id:null,momo_number:b.momo_number||null},prefer:'return=minimal'});await audit('update_unit',b.name);return json({ok:true,message:'Unit saved.'})}
    if(b.a==='delete'){await devSb(env,jwt,`branches?id=eq.${+b.id}`,{m:'DELETE',prefer:'return=minimal'});await audit('delete_unit','#'+b.id);return json({ok:true,message:'Unit deleted.'})}}}
- if(p==='/api/dev/data'){const ALLOWED=['offerings','pledges','pledge_payments','expenses','approval_requests','events','programs','services','attendance','notifications','assets','audit_log','dev_audit'];
+ if(p==='/api/dev/data'){const ALLOWED=['offerings','pledges','pledge_payments','expenses','branch_budgets','announcements','approval_requests','events','programs','services','attendance','notifications','assets','audit_log','dev_audit'];
   const tbl=String(q.table||b.table||'offerings');if(!ALLOWED.includes(tbl))return bad('Unknown table.');
   if(!post)return json({table:tbl,tables:ALLOWED,rows:await devSb(env,jwt,`${tbl}?order=id.desc&limit=200`)});
   const row=typeof b.row==='string'?JSON.parse(b.row):b.row;

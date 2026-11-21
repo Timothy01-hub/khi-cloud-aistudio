@@ -9,6 +9,7 @@ Run these files in the Supabase SQL Editor, ONE TIME EACH, in exactly this order
                       Leaders (Super Admin only), assets, church profile and features
  7. dev.sql           hidden Developer role, feature flags, branding (Super Admin = Apostle Felix Mwamba)
  8. v2.sql            receipts & statements, expenses, two-step approval, login OTP & account unlock
+ 9. v3.sql            announcements, branch budgets, and Excel/PDF export feature flag
 
 (notify_run_24h.sql is only for a database that already ran an older schema.sql.)
 

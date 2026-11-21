@@ -233,9 +233,83 @@ function Profile({onChange,unitId=''}){const [d,load,err]=useData(uPath('/api/ad
     {lkData.locks.map(l=><tr key={l.ident}><td>{l.label}</td><td>{l.kind}</td><td>{l.unit||'—'}</td><td><button type="button" style={small} onClick={()=>act('/api/admin/unlock',{ident:l.ident})}>Unlock</button></td></tr>)}
    </tbody></table></Scroll>}</div></>}
 
-export const ADMIN_LABEL={overview:'Overview',units:'Units',admins:'Admins',leaders:'Leaders',accounts:'Accounts',members:'Members',events:'Events',programs:'Programs',expenses:'Expenses',approvals:'Approvals',attendance:'Attendance',reports:'Reports',assets:'Assets',audit:'Audit log',profile:'Church profile'};
+const EMPTY_ANN={title:'',body:'',expires_at:'',branch:''};
+function Announcements({unitId=''}){
+ const [d,load,err]=useData(uPath('/api/admin/announcements',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId);
+ const [v,setV]=useState(EMPTY_ANN),[editId,setEditId]=useState(null),set=k=>e=>setV({...v,[k]:e.target.value});
+ if(!d)return <Loading err={err}/>;
+ const save=async e=>{e.preventDefault();
+  const payload=editId?{a:'edit',id:editId,...v}:{a:'add',...v};
+  const r=await act('/api/admin/announcements',payload);
+  if(r){setV(EMPTY_ANN);setEditId(null)}};
+ return <><Msg m={msg}/>
+  <form className="card" onSubmit={save}>
+   <h3>{editId?`Edit announcement #${editId}`:'Post announcement'}</h3>
+   <input placeholder="Announcement title" value={v.title} onChange={set('title')} required/>
+   <textarea rows={3} placeholder="Announcement details…" value={v.body} onChange={set('body')} required/>
+   <div className="grid">
+    <select value={v.branch} onChange={set('branch')} required={!d.canAll}><option value="">{d.canAll?'All branches':'Choose branch…'}</option>{d.units.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}</select>
+    <label className="muted">Expiry date (optional)<input type="date" value={v.expires_at} onChange={set('expires_at')}/></label>
+   </div>
+   <div style={{display:'flex',gap:'.5rem',flexWrap:'wrap'}}>
+    <button style={{width:'auto'}}>{editId?'Save announcement':'Post announcement'}</button>
+    {editId&&<button type="button" className="ghost" style={{width:'auto'}} onClick={()=>{setEditId(null);setV(EMPTY_ANN)}}>Cancel</button>}
+   </div>
+  </form>
+  <Scroll><table><thead><tr><th>Title</th><th>Audience</th><th>Expires</th><th>Status</th><th/></tr></thead><tbody>
+   {!d.announcements.length?<tr><td colSpan={5} className="muted">No announcements yet.</td></tr>:d.announcements.map(a=><tr key={a.id}>
+    <td><b>{a.title}</b><div className="muted">{a.body}</div></td>
+    <td>{a.branch_label}</td>
+    <td>{a.expires_at||'No expiry'}</td>
+    <td><span className={'tag '+(a.active?'digital':'leader')}>{a.active?'Active':'Expired'}</span></td>
+    <td style={{display:'flex',gap:'.3rem',flexWrap:'wrap'}}>
+     <button type="button" className="ghost" style={small} onClick={()=>{setEditId(a.id);setV({title:a.title,body:a.body,expires_at:a.expires_at||'',branch:a.branch_id==null?'':String(a.branch_id)})}}>Edit</button>
+     <button type="button" className="danger" style={small} onClick={()=>window.confirm('Delete this announcement?')&&act('/api/admin/announcements',{a:'delete',id:a.id})}>Delete</button>
+    </td>
+   </tr>)}
+  </tbody></table></Scroll>
+ </>;
+}
+
+function Budgets({unitId=''}){
+ const curYear=today().slice(0,4);
+ const [yr,setYr]=useState(curYear);
+ const [d,load,err]=useData(uPath('/api/admin/budgets?year='+encodeURIComponent(yr),unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId);
+ const B0={branch:'',budget_year:curYear,category:'Utilities',amount:''},[v,setV]=useState(B0),set=k=>e=>setV({...v,[k]:e.target.value});
+ if(!d)return <Loading err={err}/>;
+ return <><Msg m={msg}/>
+  <form className="card" onSubmit={async e=>{e.preventDefault();const r=await act('/api/admin/budgets',{a:'save',...v});if(r){setYr(String(v.budget_year));setV({...B0,budget_year:String(v.budget_year)})}}}>
+   <h3>Set yearly branch budget</h3>
+   <div className="grid">
+    <select value={v.branch} onChange={set('branch')} required><option value="">Choose branch…</option>{d.units.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}</select>
+    <input type="number" min="2000" max="2100" placeholder="Budget year" value={v.budget_year} onChange={set('budget_year')} required/>
+    <select value={v.category} onChange={set('category')}>{(d.categories||EXP_CATS).map(c=><option key={c} value={c}>{c}</option>)}</select>
+    <input type="number" step="0.01" min="0" placeholder="Yearly budget (K)" value={v.amount} onChange={set('amount')} required/>
+   </div>
+   <button style={{width:'auto'}}>Save budget</button>
+  </form>
+  <div className="card">
+   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:'.6rem',marginBottom:'.6rem'}}>
+    <h3 style={{margin:0}}>Budgets vs actual ({d.year})</h3>
+    <label className="muted" style={{display:'inline-flex',alignItems:'center',gap:'.4rem'}}>Year
+     <input type="number" min="2000" max="2100" value={yr} onChange={e=>setYr(e.target.value)} style={{width:100}}/>
+    </label>
+   </div>
+   <Scroll><table><thead><tr><th>Branch</th><th>Category</th><th className="r">Budget</th><th className="r">Actual spent</th><th className="r">Remaining</th><th className="r">% used</th><th>Status</th><th/></tr></thead><tbody>
+    {!d.rows.length?<tr><td colSpan={8} className="muted">No budgets set for {d.year}.</td></tr>:d.rows.map(r=><tr key={r.id}>
+     <td>{r.Branch}</td><td>{r.Category}</td><td className="r">{money(r.Budget)}</td><td className="r">{money(r.Actual)}</td><td className="r">{money(r.Remaining)}</td>
+     <td className="r"><b>{r.Pct_Used}%</b></td>
+     <td>{r.warning?<span className="badge" style={{background:'#c62828',color:'#fff'}}>⚠ &gt;90% used</span>:<span className="tag digital">OK</span>}</td>
+     <td><button type="button" className="danger" style={small} onClick={()=>window.confirm('Remove this budget?')&&act('/api/admin/budgets',{a:'delete',id:r.id})}>×</button></td>
+    </tr>)}
+   </tbody></table></Scroll>
+  </div>
+ </>;
+}
+
+export const ADMIN_LABEL={overview:'Overview',units:'Units',admins:'Admins',leaders:'Leaders',accounts:'Accounts',members:'Members',events:'Events',programs:'Programs',announcements:'Announcements',expenses:'Expenses',budgets:'Budgets',approvals:'Approvals',attendance:'Attendance',reports:'Reports',assets:'Assets',audit:'Audit log',profile:'Church profile'};
 export function AdminTabBody({tab,unitId='',onChange}){
- const C={overview:<Overview unitId={unitId}/>,units:<Units unitId={unitId} onChange={onChange}/>,admins:<Admins unitId={unitId}/>,leaders:<Leaders unitId={unitId}/>,accounts:<Accounts unitId={unitId}/>,members:<Members unitId={unitId}/>,events:<Content which="events" unitId={unitId}/>,programs:<Content which="programs" unitId={unitId}/>,expenses:<Expenses unitId={unitId}/>,approvals:<Approvals unitId={unitId}/>,attendance:<AdminAtt unitId={unitId}/>,reports:<Reports base="/api/admin" admin unitId={unitId}/>,assets:<Assets unitId={unitId}/>,audit:<Audit unitId={unitId}/>,profile:<Profile unitId={unitId} onChange={onChange}/>};
+ const C={overview:<Overview unitId={unitId}/>,units:<Units unitId={unitId} onChange={onChange}/>,admins:<Admins unitId={unitId}/>,leaders:<Leaders unitId={unitId}/>,accounts:<Accounts unitId={unitId}/>,members:<Members unitId={unitId}/>,events:<Content which="events" unitId={unitId}/>,programs:<Content which="programs" unitId={unitId}/>,announcements:<Announcements unitId={unitId}/>,expenses:<Expenses unitId={unitId}/>,budgets:<Budgets unitId={unitId}/>,approvals:<Approvals unitId={unitId}/>,attendance:<AdminAtt unitId={unitId}/>,reports:<Reports base="/api/admin" admin unitId={unitId}/>,assets:<Assets unitId={unitId}/>,audit:<Audit unitId={unitId}/>,profile:<Profile unitId={unitId} onChange={onChange}/>};
  return C[tab]||null}
 export function AdminHome(){const [sp,setSp]=useSearchParams(),logout=useLogout(),[me,reloadMe,err]=useData('/api/admin/me');
  if(!me)return <Loading err={err}/>;

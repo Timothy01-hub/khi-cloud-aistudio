@@ -66,6 +66,13 @@ export function SecView({d,msg,act,receipt,onReprint,onCloseReceipt,onLogout}){
    <input placeholder="Reason for edit (required)" value={editing.reason} onChange={e=>setEditing({...editing,reason:e.target.value})} required/>
    <div style={{display:'flex',gap:'.5rem'}}><button style={{width:'auto'}}>Save edit</button><button type="button" className="ghost" style={{width:'auto'}} onClick={()=>setEditing(null)}>Cancel</button></div></form>}
   <div className={receipt?'noprint':''}>
+   {fOn('feature.announcements')&&(d.announcements||[]).length>0&&<div className="card noprint" style={{borderLeft:'4px solid var(--gold, #b8860b)'}}><h3>Announcements</h3>
+    {d.announcements.map(a=><div key={a.id} style={{padding:'.45rem 0',borderTop:'1px solid var(--line, #eee)'}}>
+     <b>{a.title}</b> <span className="tag digital">{a.branch_label||'All branches'}</span>
+     <p style={{margin:'.25rem 0'}}>{a.body}</p>
+     {a.expires_at&&<div className="muted">Expires: {a.expires_at}</div>}
+    </div>)}
+   </div>}
    <CashForm act={act}/><PledgePay owing={d.owing} act={act}/>
    {d.me.canVoid&&fOn('feature.two_step_approval')&&(d.approvals||[]).length>0&&<div className="card"><h3>Pending two-step approvals (≥ {money(d.threshold??500)})</h3>
     <Scroll><table><thead><tr><th>Action</th><th>Entry</th><th className="r">Amount</th><th>Requested by</th><th>Reason</th><th/></tr></thead><tbody>

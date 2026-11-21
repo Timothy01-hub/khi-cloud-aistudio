@@ -103,6 +103,13 @@ export function HomeView({d,tab,msg,alerts,giving,stmtYear,onYearChange,openRece
  return <><header><div style={{display:'flex',alignItems:'center',gap:'.6rem',flexWrap:'wrap'}}><BrandLogo sub={d.me.brand||d.me.branch}/> <span className="muted">· {d.me.name}</span></div>
   <nav>{nv('events','Events')}{nv('pledges','Pledges')}{show('feature.receipts')&&<a href="#" className={tab==='giving'?'on':''} onClick={e=>{e.preventDefault();go('giving')}}>Giving</a>}{nv('alerts',<>Alerts <span className="badge" id="bc">{d.unread}</span></>)}{nv('account','Account')}{nv('about','About us')}<Install text="⬇ Install app"/><a href="#" onClick={e=>{e.preventDefault();onLogout()}}>Log out</a></nav></header>
  <main>{msg&&<p className={msg.startsWith('Error')?'err':'ok'}>{msg}</p>}
+  {show('feature.announcements')&&(d.announcements||[]).length>0&&<div className="card noprint" style={{borderLeft:'4px solid var(--gold, #b8860b)'}}><h3>Announcements</h3>
+   {d.announcements.map(a=><div key={a.id} style={{padding:'.45rem 0',borderTop:'1px solid var(--line, #eee)'}}>
+    <b>{a.title}</b> <span className="tag digital">{a.branch_label||'All branches'}</span>
+    <p style={{margin:'.25rem 0'}}>{a.body}</p>
+    {a.expires_at&&<div className="muted">Until {fmt(a.expires_at)}</div>}
+   </div>)}
+  </div>}
   {show('feature.self_checkin')&&d.services.map(s=><div className="card noprint" key={s.id}><b>⛪ {s.type} is on today</b>{s.here?<p>✔ You are checked in. God bless you!</p>:<button onClick={()=>act('/api/member/checkin',{id:s.id})}>I am here — check me in</button>}</div>)}
   {tab==='events'&&show('member.menu.events')&&<><h3>Upcoming events</h3>{d.events.length?d.events.map(e=><div className="card ev" key={e.id}>{e.banner&&<img src={e.banner} alt=""/>}<div><h3>{e.title}{e.event_date===d.today&&<> <span className="badge">TODAY</span></>}</h3><p>📅 {fmt(e.event_date)}<br/>📍 {e.location}</p><p className="muted">{e.description}</p><Geo r={e} k={'e'+e.id}/></div></div>):<p className="muted">No upcoming events yet.</p>}</>}
   {tab==='pledges'&&show('member.menu.pledges')&&<>{d.programs.map(r=><div className="card ev" key={r.id}>{r.banner&&<img src={r.banner} alt=""/>}<div><h3>{r.title}</h3><p className="muted">{r.description}</p>{r.location&&<p>📍 {r.location}</p>}{r.deadline&&<p className="muted">Deadline: {fmt(r.deadline)}</p>}<Geo r={r} k={'g'+r.id}/></div></div>)}
