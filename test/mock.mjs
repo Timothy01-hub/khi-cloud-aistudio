@@ -4,7 +4,7 @@ await build({entryPoints:['web/src/mockapi.js'],bundle:true,format:'esm',platfor
 const {api}=await import('./.out/mock.mjs');
 let fails=0;const ok=(n,c)=>{console.log((c?'PASS ':'FAIL ')+n);if(!c)fails++};
 const bad=async(p,b,part,status)=>api(p,b).then(()=>false,e=>(!part||e.message.includes(part))&&(!status||e.status===status));
-const login=(u,app)=>api('/api/staff/login',{username:u,password:'demo1234',app});
+const login=async(u,app)=>{const r=await api('/api/staff/login',{username:u,password:'demo1234',app});if(r?.otp_required)return api('/api/staff/otp',{challenge:r.challenge,code:r.demo_code});return r};
 await login('nipaadmin','admin');
 ok('limited admin: Leaders is Super Admin only',await bad('/api/admin/leaders',undefined,'Super Admin',403));
 ok('limited admin: cannot promote anyone to Leader',await bad('/api/admin/leaders',{id:1,make:true},'Super Admin',403));

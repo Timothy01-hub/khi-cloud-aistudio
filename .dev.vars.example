@@ -4,3 +4,7 @@ SUPABASE_ANON_KEY=paste-anon-key-here
 SUPABASE_JWT_SECRET=paste-jwt-secret-here
 SESSION_SECRET=any-long-random-text
 GEO_ENFORCE=false
+RESEND_API_KEY=
+EMAIL_FROM=
+NOTIFY_EMAIL=
+NOTIFY_WEBHOOK=

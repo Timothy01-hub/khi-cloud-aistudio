@@ -13,9 +13,23 @@ const DEPTS=['Ushering','Intercessory','Media','Protocol','Hospitality','Praise 
 const KW={center:'Centre',branch:'Branch',fellowship:'Fellowship'};
 const unitLabel=b=>{if(!b)return'';const k=KW[b.kind]||'Fellowship',n=String(b.name||''),u=n.toUpperCase(),w=k.toUpperCase();return!b.kind||u.endsWith(w)||(b.kind==='center'&&u.endsWith('CENTER'))?n:n+' '+k};
 const inZambia=(a,b)=>a>=-18.08&&a<=-8.22&&b>=21.99&&b<=33.71;
-const GRANT=[['accounts','Manage secretary accounts'],['members','Manage members (move, reset passwords)'],['events','Post events'],['programs','Manage pledge programs'],['attendance','View attendance'],['reports','View reports and downloads'],['void','Void entries'],['audit','View the audit log'],['assets','Manage church assets (when the feature is on)']];
+const GRANT=[['accounts','Manage secretary accounts'],['members','Manage members (move, reset passwords)'],['events','Post events'],['programs','Manage pledge programs'],['attendance','View attendance'],['reports','View reports and downloads'],['void','Void and edit entries'],['audit','View the audit log'],['assets','Manage church assets (when the feature is on)'],['expenses','Log and review branch expenses']];
 const BLOCK=[['units','Add or edit centres, branches and fellowships'],['admins','Create admins or change their privileges'],['leaders','Promote or demote Leaders'],['features','Switch features on or off'],['profile','Edit the vision, mission and church profile']];
 const kidsOf=(all,id)=>{const out=[id];for(const b of all)if(b.parent_id===id)out.push(...kidsOf(all,b.id));return out};
+const randOtp=()=>{const a=new Uint32Array(1);crypto.getRandomValues(a);return String(100000+(a[0]%900000))};
+const maskEmail=e=>{const s=String(e||'').trim();const i=s.indexOf('@');if(i<2)return s?s[0]+'***'+(i>=0?s.slice(i):''):'church office email';return s[0]+'***'+s.slice(i-1)};
+async function sendOtpEmail(env,toEmail,name,role,code){
+ const email=String(toEmail||'').trim()||env.NOTIFY_EMAIL||'';
+ let target=email;
+ if(!target){try{const p=(await sb(env,"settings?key=eq.profile&select=value"))[0]?.value;target=String(p?.email||'').trim()}catch{}}
+ const subject=`KHI ${role} verification code: ${code}`;
+ const text=`Hello ${name},\n\nYour 6-digit Kingdom Heralds verification code is: ${code}\nIt expires in 10 minutes.`;
+ if(target&&env.RESEND_API_KEY){
+  await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json'},
+   body:JSON.stringify({from:env.EMAIL_FROM||'Kingdom Heralds <no-reply@kingdomheralds.org>',to:[target],subject,text})}).catch(()=>{})}
+ else if(target&&env.NOTIFY_WEBHOOK){
+  await fetch(env.NOTIFY_WEBHOOK,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:target,subject,text,code,role,name})}).catch(()=>{})}
+ return maskEmail(target||'church email')}
 
 /* ---- Supabase (server-side service_role for normal routes; authenticated JWT for developer RLS) ---- */
 async function sb(env,path,o={}){
@@ -142,6 +156,44 @@ async function route(req,env,p,q){
   if(!pr||!(amt>=1&&amt<1e7))return bad('Choose a program and enter a valid amount.');
   const t=await rpc(env,'make_pledge',{p_member:mid,p_program:pr.id,p_amount:amt});
   return json({ok:true,message:`Thank you! Your pledge to ${pr.title} is now ${money(t)}.`})}
+ if(p==='/api/member/giving'&&!post){
+  if(!fOn('feature.receipts'))return bad('Receipts and statements are currently disabled.',403);
+  const yr=/^\d{4}$/.test(q.year||'')?+q.year:+today().slice(0,4);
+  const [offs,pps,brs,prof]=await Promise.all([
+   sb(env,`offerings?or=(member_id.eq.${mid},sender.eq.${encodeURIComponent(me.phone)})&order=created_at.desc,id.desc&limit=500`),
+   sb(env,`pledge_payments?select=id,pledge_id,amount,offering_id,receipt_no,created_at,pledges!inner(member_id,programs(title))&pledges.member_id=eq.${mid}&order=created_at.desc,id.desc`),
+   sb(env,'branches?select=id,name,kind,parent_id'),
+   sb(env,"settings?key=eq.profile&select=value").catch(()=>[])
+  ]);
+  const bnMap=Object.fromEntries((brs||[]).map(x=>[x.id,unitLabel(x)]));
+  const br=await brandOf(env,B,me.branches?.name||'');
+  const seenOff=new Set(),ppByOff=new Map();
+  for(const pp of (pps||[]))if(pp.offering_id)ppByOff.set(pp.offering_id,pp);
+  const list=[];
+  for(const o of (offs||[])){
+   seenOff.add(o.id);
+   const d=String(o.created_at||'').slice(0,10);
+   list.push({id:o.id,receipt_no:o.receipt_no||`KHI-${o.branch_id}-${d.slice(0,4)||today().slice(0,4)}-${String(o.id).padStart(4,'0')}`,
+    date:d,created_at:o.created_at,branch:bnMap[o.branch_id]||br.branch,brand:o.branch_id===B?br.brand:(bnMap[o.branch_id]||''),
+    type:o.type,category:o.category,amount:+o.amount,sender:o.sender||me.full_name,recorded_by:o.recorded_by||'',
+    note:o.note||'',voided:!!o.voided,void_reason:o.void_reason||'',is_pledge:ppByOff.has(o.id)});
+  }
+  for(const pp of (pps||[])){
+   if(pp.offering_id&&seenOff.has(pp.offering_id))continue;
+   const d=String(pp.created_at||'').slice(0,10);
+   list.push({id:'pp-'+pp.id,receipt_no:pp.receipt_no||`KHI-P-${d.slice(0,4)||today().slice(0,4)}-${String(pp.id).padStart(4,'0')}`,
+    date:d,created_at:pp.created_at,branch:br.branch,brand:br.brand,type:'physical',
+    category:pp.pledges?.programs?.title||'Pledge payment',amount:+pp.amount,sender:me.full_name,
+    recorded_by:'',note:'Pledge #'+pp.pledge_id,voided:false,void_reason:'',is_pledge:true});
+  }
+  list.sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+  const yrSet=new Set([+today().slice(0,4),...list.map(x=>+String(x.date||'').slice(0,4)).filter(Boolean)]);
+  const years=[...yrSet].sort((a,b)=>b-a);
+  const stmtRows=list.filter(x=>!x.voided&&String(x.date||'').startsWith(String(yr)));
+  const byType={},byMethod={physical:0,digital:0};
+  let total=0;
+  for(const r of stmtRows){total+=r.amount;byType[r.category]=(byType[r.category]||0)+r.amount;byMethod[r.type]=(byMethod[r.type]||0)+r.amount}
+  return json({receipts:list,statement:{year:yr,years,rows:stmtRows,byType,byMethod,total,member:{full_name:me.full_name,phone:me.phone,branch:br.branch,brand:br.brand},profile:prof?.[0]?.value||{}},features:feats})}
  if(post&&p==='/api/member/password'){
   if(!fOn('member.menu.account'))return bad('Account settings are currently disabled.',403);
   const n=String(b.new||'');
@@ -150,48 +202,120 @@ async function route(req,env,p,q){
   return json({ok:true,message:'Password changed.'})}
  return bad('Not found',404)}
 
-/* ---- staff: secretary dashboard ---- */
+/* ---- staff: secretary dashboard + 2FA OTP ---- */
 async function staffRoute(req,env,p,q,b,ip){
  const post=req.method==='POST';
  if(p==='/api/staff/logout')return json({ok:true},200,CLEAR_S);
  if(p==='/api/staff/login'&&post){
   const un=String(b.username||'').trim(),id='s:'+un.toLowerCase(),role=b.app==='superadmin'?'superadmin':b.app==='admin'?'admin':'secretary';
-  if(await rpc(env,'login_locked',{p_ident:id,p_ip:ip}))return bad('Too many failed attempts. Please wait 15 minutes and try again.',429);
+  if(await rpc(env,'login_locked',{p_ident:id,p_ip:ip}))return bad('Too many failed attempts. Please wait 15 minutes or ask the Super Admin to unlock.',429);
   const r=(await rpc(env,'staff_login',{p_username:un,p_password:String(b.password||''),p_role:role}))[0];
   if(!r){await rpc(env,'login_fail',{p_ident:id,p_ip:ip});return bad('Invalid login or account disabled.',401)}
-  const st=(await sb(env,`staff?id=eq.${r.id}&select=branch_id`))[0];
+  const st=(await sb(env,`staff?id=eq.${r.id}&select=id,branch_id,full_name,username,email`))[0];
   if(!await featOn(env,'app.'+role,st?.branch_id||null))return bad('This app is currently disabled.',403);
+  if((role==='admin'||role==='superadmin')&&await featOn(env,'feature.login_otp',st?.branch_id||null)){
+   const code=randOtp();
+   const challenge=await rpc(env,'create_login_otp',{p_role:role,p_user_id:r.id,p_code:code,p_ttl_seconds:600});
+   const sentTo=await sendOtpEmail(env,st?.email,st?.full_name||un,role,code);
+   return json({ok:true,otp_required:true,challenge,sent_to:sentTo})}
   await rpc(env,'login_clear',{p_ident:id});
   await sb(env,'audit_log',{m:'POST',b:{actor:role+':'+un,action:'login',ip},prefer:'return=minimal'});
   return json({ok:true},200,await mkCookie(env,r.id,'khs'))}
+ if(p==='/api/staff/otp'&&post){
+  const vr=(await rpc(env,'verify_login_otp',{p_token:String(b.challenge||''),p_code:String(b.code||'')}))[0];
+  if(!vr||!vr.ok){
+   if(vr?.user_id){const st=(await sb(env,`staff?id=eq.${vr.user_id}&select=username`))[0];if(st)await rpc(env,'login_fail',{p_ident:'s:'+st.username.toLowerCase(),p_ip:ip})}
+   return bad(vr?.err||'Invalid verification code.',401)}
+  const st=(await sb(env,`staff?id=eq.${vr.user_id}&active=eq.true&select=id,role,branch_id,username`))[0];
+  if(!st||st.role!==vr.role)return bad('Invalid login or account disabled.',401);
+  const id='s:'+st.username.toLowerCase();
+  if(await rpc(env,'login_locked',{p_ident:id,p_ip:ip}))return bad('Too many failed attempts. Please wait 15 minutes or ask the Super Admin to unlock.',429);
+  if(!await featOn(env,'app.'+st.role,st.branch_id||null))return bad('This app is currently disabled.',403);
+  await rpc(env,'login_clear',{p_ident:id});
+  await sb(env,'audit_log',{m:'POST',b:{actor:st.role+':'+st.username,action:'login_otp',ip},prefer:'return=minimal'});
+  return json({ok:true},200,await mkCookie(env,st.id,'khs'))}
  const sid=await who(env,req,'khs');if(!sid)return bad('Please sign in.',401);
  const me=(await sb(env,`staff?id=eq.${sid}&active=eq.true&select=*,branches(name)`))[0];
  if(!me||me.role!=='secretary')return json({error:'Please sign in.'},401,CLEAR_S);
- const B=me.branch_id,by=me.username;
+ const B=me.branch_id,by=me.username,tag='secretary:'+by;
  if(!await featOn(env,'app.secretary',B))return bad('This app is currently disabled.',403);
  const feats=await myFeats(env,B),fOn=k=>feats[k]!==false;
  const feed=async()=>{const [totals,recent]=await Promise.all([rpc(env,'branch_totals',{p_branch:B}),sb(env,`offerings?branch_id=eq.${B}&order=id.desc&limit=40`)]);
   const t=k=>totals.find(x=>x.type===k)||{today:0,month:0};
   return{totals:{pToday:+t('physical').today,dToday:+t('digital').today,month:+t('physical').month+ +t('digital').month},recent}};
+ const getThreshold=async()=>{const s=(await sb(env,"settings?key=eq.approval_threshold&select=value").catch(()=>[]))[0];const n=Number(s?.value?.amount);return Number.isFinite(n)&&n>=0?n:500};
  if(p==='/api/staff/feed')return json(await feed());
- if(p==='/api/staff/home'&&!post){const [fd,ow,br]=await Promise.all([feed(),rpc(env,'owing_pledges',{p_branch:B}),brandOf(env,B,me.branches.name)]);
-  return json({me:{name:me.full_name,branch:br.branch,centre:br.centre,brand:br.brand,slot:me.slot,canVoid:me.slot==='main'},features:feats,...fd,owing:ow})}
+ if(p==='/api/staff/home'&&!post){
+  const [fd,ow,br,thr,reqs]=await Promise.all([feed(),rpc(env,'owing_pledges',{p_branch:B}),brandOf(env,B,me.branches.name),getThreshold(),me.slot==='main'&&fOn('feature.two_step_approval')?sb(env,`approval_requests?branch_id=eq.${B}&status=eq.pending&order=id.desc`).catch(()=>[]):Promise.resolve([])]);
+  return json({me:{name:me.full_name,branch:br.branch,centre:br.centre,brand:br.brand,slot:me.slot,canVoid:me.slot==='main'},features:feats,threshold:thr,
+   approvals:(reqs||[]).map(r=>({...r,isMine:r.requested_by===tag||(r.requested_by_staff_id!=null&&r.requested_by_staff_id===me.id)})),...fd,owing:ow})}
+ if(p==='/api/staff/receipt'&&!post){
+  if(!fOn('feature.receipts'))return bad('Receipts are currently disabled.',403);
+  const [o,br,prof]=await Promise.all([sb(env,`offerings?id=eq.${+q.id||0}&branch_id=eq.${B}`),brandOf(env,B,me.branches.name),sb(env,"settings?key=eq.profile&select=value").catch(()=>[])]);
+  if(!o?.[0])return bad('Receipt not found.',404);
+  const row=o[0];
+  return json({receipt:{...row,amount:+row.amount,branch:br.branch,brand:br.brand,date:String(row.created_at||'').slice(0,10)},church:prof?.[0]?.value||{}})}
  if(post&&p==='/api/staff/cash'){
   const a=Math.round(parseFloat(b.amount)*100)/100,cat=['Offering','Tithe','Seed','Thanksgiving','Building Fund'].includes(b.category)?b.category:'Offering';
   if(!(a>0&&a<1e7))return bad('Enter a valid amount.');
-  await sb(env,'offerings',{m:'POST',b:{branch_id:B,type:'physical',category:cat,amount:a,sender:String(b.sender||'').trim().slice(0,120)||null,note:String(b.note||'').trim().slice(0,255)||null,recorded_by:by},prefer:'return=minimal'});
-  await sb(env,'audit_log',{m:'POST',b:{actor:'secretary:'+by,action:'record_physical',detail:money(a)+' '+cat,ip},prefer:'return=minimal'});
-  return json({ok:true,message:'Recorded '+money(a)+'.'})}
+  const senderStr=String(b.sender||'').trim().slice(0,120)||null;
+  let midLink=b.member_id?+b.member_id:null;
+  if(!midLink&&senderStr){const ph=phoneN(senderStr);if(ph.length>=10){const mm=(await sb(env,`members?branch_id=eq.${B}&phone=eq.${encodeURIComponent(ph)}&select=id`).catch(()=>[]))[0];if(mm)midLink=mm.id}}
+  const ins=(await sb(env,'offerings',{m:'POST',b:{branch_id:B,type:'physical',category:cat,amount:a,sender:senderStr,note:String(b.note||'').trim().slice(0,255)||null,recorded_by:by,...(midLink?{member_id:midLink}:{})},prefer:'return=representation'}))?.[0]||null;
+  await sb(env,'audit_log',{m:'POST',b:{actor:tag,action:'record_physical',detail:money(a)+' '+cat+(ins?.receipt_no?' ('+ins.receipt_no+')':''),ip},prefer:'return=minimal'});
+  return json({ok:true,id:ins?.id,receipt_no:ins?.receipt_no,message:'Recorded '+money(a)+'.'})}
  if(post&&p==='/api/staff/pledge-payment'){
   const a=Math.round(parseFloat(b.amount)*100)/100,pl=(await sb(env,`pledges?id=eq.${+b.pledge||0}&select=id,members(branch_id)`))[0];
   if(!pl||pl.members.branch_id!==B)return bad('Choose a pledge from your fellowship.');
   if(!(a>0))return bad('Enter a valid amount.');
   const done=+await rpc(env,'record_pledge_payment',{p_pledge:pl.id,p_amount:a,p_by:by,p_type:'physical'});
-  return done>0?json({ok:true,message:'Pledge payment of '+money(done)+' recorded.'}):bad('Nothing to record: that pledge is already fully paid.')}
+  if(done<=0)return bad('Nothing to record: that pledge is already fully paid.');
+  const latest=(await sb(env,`pledge_payments?pledge_id=eq.${pl.id}&order=id.desc&limit=1`).catch(()=>[]))[0];
+  return json({ok:true,receipt_no:latest?.receipt_no,message:'Pledge payment of '+money(done)+' recorded.'})}
  if(post&&p==='/api/staff/void'){
   if(me.slot!=='main')return bad('Only the Main Secretary can void entries.',403);
-  const m=await rpc(env,'void_offering',{p_id:+b.id||0,p_reason:String(b.reason||''),p_by:by,p_branch:B});
+  const reason=String(b.reason||'').trim();if(!reason)return bad('Please enter a reason.');
+  const o=(await sb(env,`offerings?id=eq.${+b.id||0}&branch_id=eq.${B}&voided=eq.false`))[0];
+  if(!o)return bad('Cannot void this entry.');
+  const thr=await getThreshold();
+  if(fOn('feature.two_step_approval')&&Number(o.amount)>=thr){
+   try{
+    const reqRow=(await sb(env,'approval_requests',{m:'POST',b:{branch_id:B,offering_id:o.id,action:'void',amount:+o.amount,payload:{reason},reason,requested_by:tag,requested_by_staff_id:me.id},prefer:'return=representation'}))?.[0]||null;
+    await sb(env,'audit_log',{m:'POST',b:{actor:tag,action:'approval_requested',detail:`void #${o.id} (${money(o.amount)}) - ${reason}`,ip},prefer:'return=minimal'});
+    return json({ok:true,pending:true,request_id:reqRow?.id,message:`Approval required (amount ≥ ${money(thr)}). Pending request sent to a second authorised approver.`});
+   }catch(e){if(e.code==='23505')return bad('There is already a pending approval request for this entry.');throw e}}
+  const m=await rpc(env,'void_offering',{p_id:o.id,p_reason:reason,p_by:by,p_branch:B});
   return m==='Entry voided.'?json({ok:true,message:m}):bad(m)}
+ if(post&&p==='/api/staff/offering-edit'){
+  if(me.slot!=='main')return bad('Only the Main Secretary can edit entries.',403);
+  const reason=String(b.reason||'').trim(),amt=Math.round(parseFloat(b.amount)*100)/100;
+  if(!reason)return bad('Please enter a reason for this edit.');
+  if(!(amt>0&&amt<1e7))return bad('Enter a valid amount.');
+  const o=(await sb(env,`offerings?id=eq.${+b.id||0}&branch_id=eq.${B}&voided=eq.false`))[0];
+  if(!o)return bad('Cannot edit this entry.');
+  const cat=String(b.category||o.category).trim().slice(0,80)||o.category;
+  const sender=b.sender!==undefined?(String(b.sender||'').trim().slice(0,120)||null):o.sender;
+  const note=b.note!==undefined?(String(b.note||'').trim().slice(0,255)||null):o.note;
+  const thr=await getThreshold();
+  if(fOn('feature.two_step_approval')&&Math.max(Number(o.amount),amt)>=thr){
+   try{
+    const reqRow=(await sb(env,'approval_requests',{m:'POST',b:{branch_id:B,offering_id:o.id,action:'edit',amount:Math.max(+o.amount,amt),payload:{amount:amt,category:cat,sender,note,old_amount:+o.amount},reason,requested_by:tag,requested_by_staff_id:me.id},prefer:'return=representation'}))?.[0]||null;
+    await sb(env,'audit_log',{m:'POST',b:{actor:tag,action:'approval_requested',detail:`edit #${o.id} (${money(o.amount)} -> ${money(amt)}) - ${reason}`,ip},prefer:'return=minimal'});
+    return json({ok:true,pending:true,request_id:reqRow?.id,message:`Approval required (amount ≥ ${money(thr)}). Edit request sent to a second authorised approver.`});
+   }catch(e){if(e.code==='23505')return bad('There is already a pending approval request for this entry.');throw e}}
+  const m=await rpc(env,'edit_offering',{p_id:o.id,p_amount:amt,p_category:cat,p_sender:sender,p_note:note,p_reason:reason,p_by:tag,p_branch:B,p_audit:true});
+  return m==='Entry updated.'?json({ok:true,message:m}):bad(m)}
+ if(post&&p==='/api/staff/approval'){
+  if(me.slot!=='main')return bad('Only the Main Secretary can review approval requests.',403);
+  if(!fOn('feature.two_step_approval'))return bad('Two-step approval is currently disabled.',403);
+  const ar=(await sb(env,`approval_requests?id=eq.${+b.id||0}&branch_id=eq.${B}`))[0];
+  if(!ar)return bad('Approval request not found.',404);
+  if(ar.requested_by===tag||(ar.requested_by_staff_id!=null&&ar.requested_by_staff_id===me.id))return bad('You cannot approve or reject your own request.',403);
+  const approve=b.action==='approve';
+  try{
+   const m=await rpc(env,'resolve_approval',{p_req:ar.id,p_approve:approve,p_by:tag,p_staff_id:me.id,p_dev_id:null,p_note:String(b.note||''),p_scope:[B],p_audit:true});
+   return json({ok:true,message:m});
+  }catch(e){return bad(e.message,String(e.message).includes('own request')?403:400)}}
  if(p==='/api/staff/attendance'){
   if(!fOn('secretary.menu.attendance'))return bad('Attendance is currently disabled.',403);
   const br=await brandOf(env,B,me.branches.name);
@@ -255,16 +379,27 @@ async function sbAttAct(env,B,by,b){
   await sb(env,`people?id=eq.${p.id}`,{m:'PATCH',b:{kind:'member'},prefer:'return=minimal'});return{ok:true,message:p.full_name+' is now a member.'}}
  throw Object.assign(new Error('Not found'),{status:404})}
 
-async function sbReport(env,f,scopeIds){
- const fb=+f.branch||0,inB=id=>(!scopeIds||scopeIds.includes(id))&&(!fb||id===fb),brs=await sb(env,'branches?select=id,name,kind');
+async function sbReport(env,f,scopeIds,dbUse=sb){
+ const fb=+f.branch||0,inB=id=>(!scopeIds||scopeIds.includes(id))&&(!fb||id===fb),brs=await dbUse('branches?select=id,name,kind');
  const bn=Object.fromEntries((brs||[]).map(x=>[x.id,unitLabel(x)])),k=f.kind;
- if(k==='people'){const ps=await sb(env,'people?order=full_name.asc');return ps.filter(p=>inB(p.branch_id)).map(p=>({Fellowship:bn[p.branch_id]||'',Name:p.full_name,Type:p.kind,Phone:p.phone||'',Address:p.address}))}
- if(k==='attendance'){const at=await sb(env,'attendance?select=via,services(branch_id,service_date,service_type),people(full_name,kind,phone,address)');
+ if(k==='financial'){
+  const from=okDate(f.from||'')?f.from:'1900-01-01',to=okDate(f.to||'')?f.to:'2999-12-31';
+  const [off,exp]=await Promise.all([dbUse('offerings?order=id.desc'),dbUse('expenses?order=id.desc').catch(()=>[])]);
+  const selBrs=(brs||[]).filter(b=>inB(b.id));
+  const rows=selBrs.map(b=>{
+   const inc=(off||[]).filter(x=>!x.voided&&x.branch_id===b.id&&x.created_at.slice(0,10)>=from&&x.created_at.slice(0,10)<=to).reduce((a,x)=>a+ +x.amount,0);
+   const expA=(exp||[]).filter(x=>x.status==='approved'&&x.branch_id===b.id&&x.expense_date>=from&&x.expense_date<=to).reduce((a,x)=>a+ +x.amount,0);
+   return{Branch:unitLabel(b),Income:inc,Approved_Expenses:expA,Balance:inc-expA}});
+  const cwInc=(off||[]).filter(x=>!x.voided&&x.created_at.slice(0,10)>=from&&x.created_at.slice(0,10)<=to).reduce((a,x)=>a+ +x.amount,0);
+  const cwExp=(exp||[]).filter(x=>x.status==='approved'&&x.expense_date>=from&&x.expense_date<=to).reduce((a,x)=>a+ +x.amount,0);
+  return[...rows,{Branch:'CHURCH-WIDE TOTAL',Income:cwInc,Approved_Expenses:cwExp,Balance:cwInc-cwExp}]}
+ if(k==='people'){const ps=await dbUse('people?order=full_name.asc');return ps.filter(p=>inB(p.branch_id)).map(p=>({Fellowship:bn[p.branch_id]||'',Name:p.full_name,Type:p.kind,Phone:p.phone||'',Address:p.address}))}
+ if(k==='attendance'){const at=await dbUse('attendance?select=via,services(branch_id,service_date,service_type),people(full_name,kind,phone,address)');
   return at.filter(x=>x.services&&inB(x.services.branch_id)&&x.services.service_date>=f.from&&x.services.service_date<=f.to).map(x=>({Date:x.services.service_date,Service:x.services.service_type,Fellowship:bn[x.services.branch_id]||'',Name:x.people?.full_name||'',Type:x.people?.kind||'',Phone:x.people?.phone||'',Address:x.people?.address||'',Checked_in_by:x.via}))}
- if(k==='pledges'){const pl=await sb(env,'pledges?select=amount,members(full_name,phone,branch_id),programs(title),pledge_payments(amount)');
+ if(k==='pledges'){const pl=await dbUse('pledges?select=amount,members(full_name,phone,branch_id),programs(title),pledge_payments(amount)');
   return pl.filter(x=>x.members&&inB(x.members.branch_id)).map(x=>{const paid=(x.pledge_payments||[]).reduce((a,y)=>a+Number(y.amount),0);return{Member:x.members.full_name,Phone:x.members.phone,Fellowship:bn[x.members.branch_id]||'',Program:x.programs?.title||'',Pledged:+x.amount,Paid:paid,Balance:+x.amount-paid}})}
- const off=await sb(env,'offerings?order=id.desc');
- return off.filter(x=>inB(x.branch_id)&&x.created_at.slice(0,10)>=f.from&&x.created_at.slice(0,10)<=f.to&&(!f.type||x.type===f.type)).map(x=>({Date:x.created_at.slice(0,16).replace('T',' '),Fellowship:bn[x.branch_id]||'',Type:x.type,Category:x.category,Given_by:x.sender||'',Reference:x.reference||'',Amount:+x.amount,Status:x.voided?'VOIDED':''}))}
+ const off=await dbUse('offerings?order=id.desc');
+ return off.filter(x=>inB(x.branch_id)&&x.created_at.slice(0,10)>=f.from&&x.created_at.slice(0,10)<=f.to&&(!f.type||x.type===f.type)).map(x=>({Receipt_No:x.receipt_no||'',Date:x.created_at.slice(0,16).replace('T',' '),Fellowship:bn[x.branch_id]||'',Type:x.type,Category:x.category,Given_by:x.sender||'',Reference:x.reference||'',Amount:+x.amount,Status:x.voided?'VOIDED':''}))}
 
 /* ---- admin & Super Admin ---- */
 async function adminRoute(req,env,p,q,b,ip){
@@ -278,6 +413,7 @@ async function adminRoute(req,env,p,q,b,ip){
  const isDev=wantDev;
  const dbUse=(path,o)=>isDev?devSb(env,devJwt,path,o):sb(env,path,o);
  const auditDev=(action,detail='')=>isDev?devSb(env,devJwt,'dev_audit',{m:'POST',b:{dev_id:devUser.id,action,detail:String(detail||''),ip},prefer:'return=minimal'}):Promise.resolve();
+ const auditStaff=(action,detail='')=>!isDev?sb(env,'audit_log',{m:'POST',b:{actor:tag,action,detail:String(detail||''),ip},prefer:'return=minimal'}):auditDev(action,detail);
  const allB=await dbUse('branches?select=*&order=is_main.desc,name.asc');
  const rawUid=q.unit_id??b.unit_id;
  const devUnitId=isDev&&rawUid!==undefined&&rawUid!==null&&rawUid!==''&&rawUid!=='all'?+rawUid:null;
@@ -286,23 +422,31 @@ async function adminRoute(req,env,p,q,b,ip){
  const me=isDev?{id:devUser.id,role:isSuper?'superadmin':'admin',branch_id:devUnitId,full_name:devUser.full_name,username:devUser.username,privileges:GRANT.map(g=>g[0]),branches:devUnitId?{name:allB.find(x=>x.id===devUnitId)?.name||''}:null}:staffAdmin;
  const unitScope=isSuper?null:me.branch_id;
  if(!isDev&&!await featOn(env,isSuper?'app.superadmin':'app.admin',unitScope))return bad('This app is currently disabled.',403);
- const feats=isDev?{}:await myFeats(env,unitScope),flagOn=k=>isDev?true:feats['admin.menu.'+k]!==false;
+ const feats=isDev?{}:await myFeats(env,unitScope),flagOn=k=>isDev?true:feats['admin.menu.'+k]!==false,v2On=k=>isDev?true:feats['feature.'+k]!==false;
  const scope=isSuper?null:kidsOf(allB,me.branch_id);
  const can=pr=>isDev||isSuper||(me.privileges||[]).includes(pr),by=isDev?'developer:'+devUser.username:me.username,tag=isDev?'developer:'+devUser.username:me.role+':'+by,post=req.method==='POST';
  const units=()=>allB.filter(x=>!scope||scope.includes(x.id)).map(x=>({...x,label:unitLabel(x)}));
  const featSet=async()=>((await dbUse("settings?key=eq.features&select=value"))[0]?.value)||{assets:false};
+ const getThreshold=async()=>{const s=(await dbUse("settings?key=eq.approval_threshold&select=value").catch(()=>[]))[0];const n=Number(s?.value?.amount);return Number.isFinite(n)&&n>=0?n:500};
+ const lockedSet=async()=>{try{const rows=isDev?await devRpc(env,devJwt,'dev_locked_idents',{}):await rpc(env,'locked_idents',{});return new Set((rows||[]).map(x=>x.ident))}catch{return new Set()}};
  if(p==='/api/admin/me'){
   const fs=await featSet();
-  const tabs=['overview',...(isSuper?['units','admins','leaders']:[]),...(can('accounts')&&flagOn('accounts')?['accounts']:[]),...(can('members')&&flagOn('members')?['members']:[]),...(can('events')&&flagOn('events')?['events']:[]),...(can('programs')&&flagOn('programs')?['programs']:[]),...(can('attendance')&&flagOn('attendance')?['attendance']:[]),...(can('reports')&&flagOn('reports')?['reports']:[]),...((isDev||fs.assets)&&can('assets')&&flagOn('assets')?['assets']:[]),...(can('audit')&&flagOn('audit')?['audit']:[]),...(isSuper?['profile']:[])];
+  const tabs=['overview',...(isSuper?['units','admins','leaders']:[]),...(can('accounts')&&flagOn('accounts')?['accounts']:[]),...(can('members')&&flagOn('members')?['members']:[]),...(can('events')&&flagOn('events')?['events']:[]),...(can('programs')&&flagOn('programs')?['programs']:[]),...(can('expenses')&&v2On('expenses')?['expenses']:[]),...(can('void')&&v2On('two_step_approval')?['approvals']:[]),...(can('attendance')&&flagOn('attendance')?['attendance']:[]),...(can('reports')&&flagOn('reports')?['reports']:[]),...((isDev||fs.assets)&&can('assets')&&flagOn('assets')?['assets']:[]),...(can('audit')&&flagOn('audit')?['audit']:[]),...(isSuper?['profile']:[])];
   const br=isSuper?{brand:'KINGDOM HERALDS INTERNATIONAL CHURCH'}:await brandOf(env,me.branch_id,me.branches?.name||'');
-  return json({role:me.role,is_dev:isDev,name:me.full_name,tabs,unit:isSuper?'KINGDOM HERALDS INTERNATIONAL CHURCH':br.branch,brand:br.brand,privileges:me.privileges||[],features:feats})}
+  return json({role:me.role,is_dev:isDev,name:me.full_name,tabs,unit:isSuper?'KINGDOM HERALDS INTERNATIONAL CHURCH':br.branch,brand:br.brand,privileges:me.privileges||[],features:feats,canVoid:can('void')})}
  if(p==='/api/admin/overview'){
   const us=units(),inS=scope?`branch_id=in.(${scope.join(',')})&`:'';
   const [recent,ts]=await Promise.all([dbUse(`offerings?${inS}order=id.desc&limit=40`),Promise.all(us.map(x=>rpc(env,'branch_totals',{p_branch:x.id})))]);
   const bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
   const rows=us.map((x,i)=>{const a=ts[i]||[],pT=+(a.find(y=>y.type==='physical')?.today||0),dT=+(a.find(y=>y.type==='digital')?.today||0),m=+(a.find(y=>y.type==='physical')?.month||0)+ +(a.find(y=>y.type==='digital')?.month||0);return{id:x.id,name:x.label,is_main:x.is_main,kind:x.kind,today:pT+dT,month:m}});
   const tot=rows.reduce((a,r)=>({today:a.today+r.today,month:a.month+r.month}),{today:0,month:0});
-  return json({rows,totals:{pToday:tot.today,dToday:0,month:tot.month},recent:(recent||[]).map(x=>({...x,bn:bnMap[x.branch_id]||''}))})}
+  return json({rows,totals:{pToday:tot.today,dToday:0,month:tot.month},canVoid:can('void'),recent:(recent||[]).map(x=>({...x,bn:bnMap[x.branch_id]||''}))})}
+ if(p==='/api/admin/receipt'&&!post){
+  if(!v2On('receipts'))return bad('Receipts are currently disabled.',403);
+  const o=(await dbUse(`offerings?id=eq.${+q.id||0}`))[0];
+  if(!o||(scope&&!scope.includes(o.branch_id)))return bad('Receipt not found.',404);
+  const [br,prof]=await Promise.all([brandOf(env,o.branch_id,unitLabel(allB.find(x=>x.id===o.branch_id))),dbUse("settings?key=eq.profile&select=value").catch(()=>[])]);
+  return json({receipt:{...o,amount:+o.amount,branch:br.branch,brand:br.brand,date:String(o.created_at||'').slice(0,10)},church:prof?.[0]?.value||{}})}
  if(p==='/api/admin/fellowships'){if(!isSuper)return bad('Only the Super Admin can do that.',403);if(!post)return json(allB.map(x=>({...x,label:unitLabel(x)})));
   const par=b.parent?+b.parent:null,kind=['center','branch','fellowship'].includes(b.kind)?b.kind:'fellowship';
   if(b.a==='add'){const u=(await dbUse('branches',{m:'POST',b:{name:String(b.name||'').trim(),kind,parent_id:par,is_main:false,momo_number:b.momo||null},prefer:'return=representation'}))[0];
@@ -310,8 +454,9 @@ async function adminRoute(req,env,p,q,b,ip){
   await dbUse(`branches?id=eq.${+b.id||0}`,{m:'PATCH',b:{name:String(b.name||'').trim(),kind,parent_id:par,momo_number:b.momo||null},prefer:'return=minimal'});
   await auditDev('admin_edit_unit',String(b.name||''));return json({ok:true,message:'Saved.'})}
  if(p==='/api/admin/admins'){if(!isSuper)return bad('Only the Super Admin can do that.',403);
-  const st=await dbUse("staff?role=eq.admin&select=id,username,full_name,branch_id,privileges,active"),bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
-  return json({admins:(st||[]).map(s=>({...s,unit:bnMap[s.branch_id]||''})),units:allB.map(x=>({...x,label:unitLabel(x)})),grantable:GRANT,blocked:BLOCK})}
+  const [st,lk]=await Promise.all([dbUse("staff?role=eq.admin&select=id,username,full_name,branch_id,privileges,active"),lockedSet()]);
+  const bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
+  return json({admins:(st||[]).map(s=>({...s,unit:bnMap[s.branch_id]||'',locked:lk.has('s:'+String(s.username||'').toLowerCase())})),units:allB.map(x=>({...x,label:unitLabel(x)})),grantable:GRANT,blocked:BLOCK})}
  if(p==='/api/admin/admin'){if(!isSuper)return bad('Only the Super Admin can do that.',403);
   if(b.a==='create'){if(isDev)await devRpc(env,devJwt,'dev_create_staff',{p_role:'admin',p_branch:+b.branch,p_slot:null,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:b.privileges||[]});
    else await rpc(env,'create_staff',{p_role:'admin',p_branch:+b.branch,p_slot:null,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:b.privileges||[]});
@@ -331,12 +476,16 @@ async function adminRoute(req,env,p,q,b,ip){
    return json({ok:true,message:pe.full_name+(b.make?' is now a Leader.':' is no longer a Leader.')})}
   return json({ok:true,message:await rpc(env,'set_leader',{p_person:+b.id,p_make:!!b.make,p_by:tag})})}
  if(p==='/api/admin/profile'){if(!isSuper)return bad('Only the Super Admin can do that.',403);
-  if(!post){const [pr,fs]=await Promise.all([dbUse("settings?key=eq.profile&select=value"),featSet()]);return json({profile:pr?.[0]?.value||{},features:fs})}
+  if(!post){const [pr,fs,thr]=await Promise.all([dbUse("settings?key=eq.profile&select=value"),featSet(),getThreshold()]);return json({profile:pr?.[0]?.value||{},features:fs,threshold:thr})}
   if(b.feature==='assets'){await dbUse("settings?key=eq.features",{m:'PATCH',b:{value:{assets:!!b.on}},prefer:'return=minimal'});await auditDev('feature_assets',b.on?'on':'off');return json({ok:true,message:'Assets feature switched '+(b.on?'ON':'OFF')+'.'})}
+  if(b.threshold!==undefined){const t=Math.round(parseFloat(b.threshold)*100)/100;if(!(t>=0&&t<1e7))return bad('Enter a valid threshold amount (0 or higher).');
+   await dbUse('settings?on_conflict=key',{m:'POST',b:{key:'approval_threshold',value:{amount:t}},prefer:'resolution=merge-duplicates,return=minimal'});
+   await auditStaff('approval_threshold_edit',money(t));return json({ok:true,message:`Two-step approval threshold set to ${money(t)}.`})}
   await dbUse("settings?key=eq.profile",{m:'PATCH',b:{value:b.profile},prefer:'return=minimal'});await auditDev('profile_edit','');return json({ok:true,message:'Profile saved.'})}
  if(p==='/api/admin/accounts'){if(!can('accounts')||!flagOn('accounts'))return bad('You do not have permission for that.',403);
-  const st=await dbUse("staff?role=eq.secretary&select=id,branch_id,slot,username,full_name,active");
-  return json({fellowships:units().map(x=>({id:x.id,name:x.name,label:x.label,is_main:x.is_main,slots:{main:(st||[]).find(s=>s.branch_id===x.id&&s.slot==='main')||null,assistant:(st||[]).find(s=>s.branch_id===x.id&&s.slot==='assistant')||null}})),me:{username:by}})}
+  const [st,lk]=await Promise.all([dbUse("staff?role=eq.secretary&select=id,branch_id,slot,username,full_name,active"),isSuper?lockedSet():Promise.resolve(new Set())]);
+  const mapS=s=>s?({...s,locked:lk.has('s:'+String(s.username||'').toLowerCase())}):null;
+  return json({fellowships:units().map(x=>({id:x.id,name:x.name,label:x.label,is_main:x.is_main,slots:{main:mapS((st||[]).find(s=>s.branch_id===x.id&&s.slot==='main')),assistant:mapS((st||[]).find(s=>s.branch_id===x.id&&s.slot==='assistant'))}})),me:{username:by}})}
  if(p==='/api/admin/account'){if(!can('accounts'))return bad('You do not have permission for that.',403);
   if(b.a==='own'){if(isDev){await devRpc(env,devJwt,'dev_change_password',{p_id:devUser.id,p_password:String(b.password||'')});await auditDev('change_password','')}
    else await rpc(env,'staff_set_password',{p_id:me.id,p_password:String(b.password||'')});
@@ -353,18 +502,64 @@ async function adminRoute(req,env,p,q,b,ip){
   if(b.a==='toggle'){await dbUse(`staff?id=eq.${s.id}`,{m:'PATCH',b:{active:!s.active},prefer:'return=minimal'});await auditDev('admin_toggle',s.username);return json({ok:true,message:!s.active?'Account enabled.':'Account disabled.'})}
   if(b.a==='delete'){await dbUse(`staff?id=eq.${s.id}`,{m:'DELETE',prefer:'return=minimal'});await auditDev('admin_delete',s.username);return json({ok:true,message:'Account deleted.'})}}
  if(p==='/api/admin/members'){if(!can('members')||!flagOn('members'))return bad('You do not have permission for that.',403);
-  const ms=await dbUse(`members?${scope?`branch_id=in.(${scope.join(',')})&`:''}select=id,branch_id,full_name,phone,pledges(amount,pledge_payments(amount))`);
-  return json({fellowships:units(),rows:(ms||[]).map(m=>({id:m.id,branch_id:m.branch_id,full_name:m.full_name,phone:m.phone,pledged:(m.pledges||[]).reduce((a,x)=>a+ +x.amount,0),paid:(m.pledges||[]).reduce((a,x)=>a+(x.pledge_payments||[]).reduce((s,y)=>s+ +y.amount,0),0)}))})}
+  const [ms,lk]=await Promise.all([dbUse(`members?${scope?`branch_id=in.(${scope.join(',')})&`:''}select=id,branch_id,full_name,phone,pledges(amount,pledge_payments(amount))`),isSuper?lockedSet():Promise.resolve(new Set())]);
+  return json({fellowships:units(),rows:(ms||[]).map(m=>({id:m.id,branch_id:m.branch_id,full_name:m.full_name,phone:m.phone,locked:lk.has(m.phone),pledged:(m.pledges||[]).reduce((a,x)=>a+ +x.amount,0),paid:(m.pledges||[]).reduce((a,x)=>a+(x.pledge_payments||[]).reduce((s,y)=>s+ +y.amount,0),0)}))})}
  if(p==='/api/admin/member'){if(!can('members')||!flagOn('members'))return bad('You do not have permission for that.',403);
   const m=(await dbUse(`members?id=eq.${+b.id||0}`))[0];if(!m||(scope&&!scope.includes(m.branch_id)))return bad('Not found',404);
   if(b.a==='move'){if(scope&&!scope.includes(+b.branch))return bad('You can only move members within your own area.',403);
    await dbUse(`members?id=eq.${m.id}`,{m:'PATCH',b:{branch_id:+b.branch},prefer:'return=minimal'});
    await dbUse(`people?member_id=eq.${m.id}`,{m:'PATCH',b:{branch_id:+b.branch},prefer:'return=minimal'});await auditDev('admin_move_member','#'+m.id);return json({ok:true,message:'Member moved.'})}
   if(b.a==='reset'){const t=isDev?await devRpc(env,devJwt,'dev_reset_member_password',{p_id:m.id}):await rpc(env,'member_reset_password',{p_id:m.id});await auditDev('admin_reset_member','#'+m.id);return json({ok:true,message:`Temporary password for this member: ${t} (shown once; they must change it at next login).`})}}
+ if(p==='/api/admin/locks'&&!post){
+  if(!isSuper)return bad('Only the Super Admin can manage account locks.',403);
+  const [lk,st,ms,ds]=await Promise.all([lockedSet(),dbUse('staff?select=id,username,full_name,role,branch_id'),dbUse('members?select=id,full_name,phone,branch_id'),isDev?devSb(env,devJwt,'dev_accounts?select=id,username,full_name').catch(()=>[]):Promise.resolve([])]);
+  const bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
+  const locks=[];
+  for(const ident of lk){
+   if(ident.startsWith('s:')){const un=ident.slice(2),s=(st||[]).find(x=>String(x.username||'').toLowerCase()===un);locks.push({ident,kind:'staff',label:s?`${s.full_name} (@${s.username} · ${s.role})`:ident,unit:s?.branch_id?bnMap[s.branch_id]:'All'})}
+   else if(ident.startsWith('d:')){if(!isDev)continue;const un=ident.slice(2),d=(ds||[]).find(x=>String(x.username||'').toLowerCase()===un);locks.push({ident,kind:'dev',label:d?`${d.full_name} (@${d.username} · developer)`:ident,unit:'Developer'})}
+   else{const m=(ms||[]).find(x=>x.phone===ident);locks.push({ident,kind:'member',label:m?`${m.full_name} (${m.phone})`:ident,unit:m?bnMap[m.branch_id]:''})}}
+  return json({locks})}
+ if(p==='/api/admin/unlock'&&post){
+  if(!isSuper)return bad('Only the Super Admin can unlock accounts.',403);
+  const ident=String(b.ident||'').trim();
+  if(!ident||(ident.startsWith('d:')&&!isDev))return bad('Not found',404);
+  if(isDev){await devRpc(env,devJwt,'dev_unlock_login',{p_ident:ident});await auditDev('unlock_account',ident)}
+  else await rpc(env,'unlock_login',{p_ident:ident,p_by:tag});
+  return json({ok:true,message:'Account unlocked.'})}
+ if(p==='/api/admin/expenses'){
+  if(!can('expenses')||!v2On('expenses'))return bad('You do not have permission for that.',403);
+  const bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
+  if(!post){
+   const rows=await dbUse(`expenses?${scope?`branch_id=in.(${scope.join(',')})&`:''}order=expense_date.desc,id.desc&limit=200`);
+   const mapped=(rows||[]).map(x=>({...x,amount:+x.amount,bn:bnMap[x.branch_id]||'',canReview:x.status==='pending'&&(isSuper||(x.logged_by!==tag&&!( !isDev&&x.logged_by_staff_id!=null&&x.logged_by_staff_id===me.id )))}));
+   const sumSt=st=>mapped.filter(x=>x.status===st).reduce((a,x)=>a+x.amount,0);
+   return json({expenses:mapped,units:units(),totals:{pending:sumSt('pending'),approved:sumSt('approved'),rejected:sumSt('rejected')}})}
+  if(b.a==='add'){
+   const br=+b.branch;if(!allB.some(x=>x.id===br)||(scope&&!scope.includes(br)))return bad('Choose a church in your area.',403);
+   const dt=String(b.expense_date||today()),cat=String(b.category||'').trim().slice(0,60),amt=Math.round(parseFloat(b.amount)*100)/100,desc=String(b.description||'').trim().slice(0,500);
+   const photo=b.receipt_photo?String(b.receipt_photo):null;
+   if(!okDate(dt))return bad('Choose a valid date.');
+   if(!cat||!desc)return bad('Category and description are required.');
+   if(!(amt>0&&amt<1e7))return bad('Enter a valid amount.');
+   if(photo&&(!photo.startsWith('data:image/')||photo.length>4.5e6))return bad('Invalid receipt image.');
+   await dbUse('expenses',{m:'POST',b:{branch_id:br,expense_date:dt,category:cat,amount:amt,description:desc,receipt_photo:photo,status:'pending',logged_by:tag,logged_by_staff_id:isDev?null:me.id,logged_by_dev_id:isDev?devUser.id:null},prefer:'return=minimal'});
+   await auditStaff('expense_logged',`${bnMap[br]||br}: ${money(amt)} ${cat}`);
+   return json({ok:true,message:'Expense logged (pending approval).'})}
+  if(b.a==='approve'||b.a==='reject'){
+   const ex=(await dbUse(`expenses?id=eq.${+b.id||0}`))[0];
+   if(!ex||(scope&&!scope.includes(ex.branch_id)))return bad('Expense not found.',404);
+   if(ex.status!=='pending')return bad('This expense has already been reviewed.');
+   if(!isSuper&&(ex.logged_by===tag||(!isDev&&ex.logged_by_staff_id!=null&&ex.logged_by_staff_id===me.id)))return bad('A different admin or Super Admin must review this expense.',403);
+   const status=b.a==='approve'?'approved':'rejected';
+   await dbUse(`expenses?id=eq.${ex.id}`,{m:'PATCH',b:{status,reviewed_by:tag,reviewed_by_staff_id:isDev?null:me.id,reviewed_by_dev_id:isDev?devUser.id:null,review_note:String(b.note||'').trim().slice(0,255)||null,reviewed_at:new Date().toISOString()},prefer:'return=minimal'});
+   await auditStaff(b.a==='approve'?'expense_approved':'expense_rejected',`#${ex.id} ${money(ex.amount)} ${ex.category}`);
+   return json({ok:true,message:`Expense ${status}.`})}
+  return bad('Bad request')}
  if(p==='/api/admin/content'){if(!can('events')&&!can('programs'))return bad('You do not have permission for that.',403);
   const [ev,pr]=await Promise.all([flagOn('events')?dbUse('events?order=event_date.desc'):Promise.resolve([]),flagOn('programs')?dbUse('programs?select=*,pledges(amount,pledge_payments(amount))&order=id.desc'):Promise.resolve([])]);
   const vis=id=>isSuper||(id!==null&&scope.includes(id));
-  return json({canAll:isSuper,fellowships:units(),events:(ev||[]).filter(e=>vis(e.branch_id)),programs:(pr||[]).filter(g=>vis(g.branch_id)).map(g=>({...g,pledged:(g.pledges||[]).reduce((a,x)=>a+ +x.amount,0),paid:(g.pledges||[]).reduce((a,x)=>a+(g.pledge_payments||[]).reduce((s,y)=>s+ +y.amount,0),0)}))})}
+  return json({canAll:isSuper,fellowships:units(),events:(ev||[]).filter(e=>vis(e.branch_id)),programs:(pr||[]).filter(g=>vis(g.branch_id)).map(g=>({...g,pledged:(g.pledges||[]).reduce((a,x)=>a+ +x.amount,0),paid:(g.pledges||[]).reduce((a,x)=>a+(x.pledge_payments||[]).reduce((s,y)=>s+ +y.amount,0),0)}))})}
  if(p==='/api/admin/event'||p==='/api/admin/program'){const ev=p.endsWith('event');if(!can(ev?'events':'programs')||!flagOn(ev?'events':'programs'))return bad('You do not have permission for that.',403);
   const owns=x=>x&&(isSuper||(x.branch_id!==null&&scope.includes(x.branch_id)));
   if(b.a==='delete'){const e=(await dbUse(`events?id=eq.${+b.id||0}`))[0];if(!owns(e))return bad('Not found',404);await dbUse(`events?id=eq.${e.id}`,{m:'DELETE',prefer:'return=minimal'});await auditDev('admin_delete_event',e.title);return json({ok:true,message:'Event deleted.'})}
@@ -383,22 +578,75 @@ async function adminRoute(req,env,p,q,b,ip){
  if(p==='/api/admin/attendance'){if(!can('attendance')||!flagOn('attendance'))return bad('You do not have permission for that.',403);
   const v=await sbAttView(env,scope,null,q),us=units();
   return json({summary:us.map(x=>({id:x.id,name:x.label,members:v.directory.filter(y=>y.branch_id===x.id&&y.kind!=='visitor').length,visitors:v.directory.filter(y=>y.branch_id===x.id&&y.kind==='visitor').length,latest:null})),services:v.services.filter(s=>!+q.branch||String(s.branch_id)===q.branch),present:v.present,people:v.directory,fellowships:us})}
- if(p==='/api/admin/report'){if(!can('reports')||!flagOn('reports'))return bad('You do not have permission for that.',403);return json({rows:await sbReport(env,q,scope),fellowships:units()})}
+ if(p==='/api/admin/report'){if(!can('reports')||!flagOn('reports'))return bad('You do not have permission for that.',403);
+  const rows=await sbReport(env,q,scope,dbUse);
+  let financial=null;
+  if(v2On('expenses')){const fin=await sbReport(env,{...q,kind:'financial'},scope,dbUse);financial={branches:fin.slice(0,-1),churchWide:fin.at(-1)||null}}
+  return json({rows,financial,fellowships:units()})}
  if(p==='/api/admin/audit'){if(!can('audit')||!flagOn('audit'))return bad('You do not have permission for that.',403);
   const rows=await dbUse('audit_log?order=id.desc&limit=300');
   if(isSuper)return json({rows});
   const st=await dbUse('staff?select=username,branch_id');
   const mine=new Set((st||[]).filter(s=>s.branch_id!=null&&scope.includes(s.branch_id)).map(s=>s.username));
   return json({rows:(rows||[]).filter(r=>mine.has(String(r.actor||'').split(':')[1]))})}
+ if(p==='/api/admin/approvals'&&!post){if(!can('void')||!v2On('two_step_approval'))return bad('You do not have permission for that.',403);
+  const inS=scope?`branch_id=in.(${scope.join(',')})&`:'';
+  const [reqs,thr]=await Promise.all([dbUse(`approval_requests?${inS}order=id.desc&limit=100`).catch(()=>[]),getThreshold()]);
+  const bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
+  return json({threshold:thr,canEditThreshold:isSuper,requests:(reqs||[]).map(r=>({...r,bn:bnMap[r.branch_id]||'',isMine:r.requested_by===tag||(isDev?r.requested_by_dev_id===devUser.id:(!isDev&&r.requested_by_staff_id!=null&&r.requested_by_staff_id===me.id))}))})}
+ if(post&&p==='/api/admin/approval'){if(!can('void')||!v2On('two_step_approval'))return bad('You do not have permission for that.',403);
+  const ar=(await dbUse(`approval_requests?id=eq.${+b.id||0}`))[0];
+  if(!ar||(scope&&!scope.includes(ar.branch_id)))return bad('Approval request not found.',404);
+  if(ar.requested_by===tag||(isDev?ar.requested_by_dev_id===devUser.id:(ar.requested_by_staff_id!=null&&ar.requested_by_staff_id===me.id)))return bad('You cannot approve or reject your own request.',403);
+  const approve=b.action==='approve';
+  if(isDev){
+   const m=await devRpc(env,devJwt,'dev_resolve_approval',{p_req:ar.id,p_approve:approve,p_by:tag,p_dev_id:devUser.id,p_note:String(b.note||''),p_scope:scope});
+   await auditDev(approve?'approval_approved':'approval_rejected',`Req #${ar.id} (${ar.action} #${ar.offering_id})`);
+   return json({ok:true,message:m})}
+  const m=await rpc(env,'resolve_approval',{p_req:ar.id,p_approve:approve,p_by:tag,p_staff_id:me.id,p_dev_id:null,p_note:String(b.note||''),p_scope:scope,p_audit:true});
+  return json({ok:true,message:m})}
  if(post&&p==='/api/admin/void'){if(!can('void'))return bad('You do not have permission for that.',403);
-  if(isDev){const reason=String(b.reason||'').trim();const o=(await devSb(env,devJwt,`offerings?id=eq.${+b.id||0}&voided=eq.false`))[0];
-   if(!o||(scope&&!scope.includes(o.branch_id))||!reason)return bad('Cannot void this entry.');
+  const reason=String(b.reason||'').trim();if(!reason)return bad('Cannot void this entry.');
+  const o=(await dbUse(`offerings?id=eq.${+b.id||0}&voided=eq.false`))[0];
+  if(!o||(scope&&!scope.includes(o.branch_id)))return bad('Cannot void this entry.');
+  const thr=await getThreshold();
+  const twoOn=await featOn(env,'feature.two_step_approval',o.branch_id);
+  if(twoOn&&Number(o.amount)>=thr){
+   try{
+    const reqRow=(await dbUse('approval_requests',{m:'POST',b:{branch_id:o.branch_id,offering_id:o.id,action:'void',amount:+o.amount,payload:{reason},reason,requested_by:tag,requested_by_staff_id:isDev?null:me.id,requested_by_dev_id:isDev?devUser.id:null},prefer:'return=representation'}))?.[0]||null;
+    await auditStaff('approval_requested',`void #${o.id} (${money(o.amount)}) - ${reason}`);
+    return json({ok:true,pending:true,request_id:reqRow?.id,message:`Approval required (amount ≥ ${money(thr)}). Pending request sent to a second authorised approver.`});
+   }catch(e){if(e.code==='23505')return bad('There is already a pending approval request for this entry.');throw e}}
+  if(isDev){
    await devSb(env,devJwt,`offerings?id=eq.${o.id}`,{m:'PATCH',b:{voided:true,void_reason:reason.slice(0,255),voided_by:by,voided_at:new Date().toISOString()},prefer:'return=minimal'});
    const pps=await devSb(env,devJwt,`pledge_payments?offering_id=eq.${o.id}&select=id,amount,pledges(member_id,programs(title))`);
    for(const x of (pps||[])){await devSb(env,devJwt,`pledge_payments?id=eq.${x.id}`,{m:'DELETE',prefer:'return=minimal'});
     if(x.pledges)await devSb(env,devJwt,'notifications',{m:'POST',b:{member_id:x.pledges.member_id,message:`A payment of K${Number(x.amount).toFixed(2)} for ${x.pledges.programs?.title||''} was reversed by the church office. Your balance has been restored.`},prefer:'return=minimal'})}
    await auditDev('void_offering',`#${o.id} - ${reason}`);return json({ok:true,message:'Entry voided.'})}
-  const m=await rpc(env,'void_offering',{p_id:+b.id||0,p_reason:String(b.reason||''),p_by:tag,p_branch:isSuper?null:me.branch_id});return m==='Entry voided.'?json({ok:true,message:m}):bad(m)}
+  const m=await rpc(env,'void_offering',{p_id:o.id,p_reason:reason,p_by:tag,p_branch:isSuper?null:me.branch_id});return m==='Entry voided.'?json({ok:true,message:m}):bad(m)}
+ if(post&&p==='/api/admin/offering-edit'){if(!can('void'))return bad('You do not have permission for that.',403);
+  const reason=String(b.reason||'').trim(),amt=Math.round(parseFloat(b.amount)*100)/100;
+  if(!reason)return bad('Please enter a reason for this edit.');
+  if(!(amt>0&&amt<1e7))return bad('Enter a valid amount.');
+  const o=(await dbUse(`offerings?id=eq.${+b.id||0}&voided=eq.false`))[0];
+  if(!o||(scope&&!scope.includes(o.branch_id)))return bad('Cannot edit this entry.');
+  const cat=String(b.category||o.category).trim().slice(0,80)||o.category;
+  const sender=b.sender!==undefined?(String(b.sender||'').trim().slice(0,120)||null):o.sender;
+  const note=b.note!==undefined?(String(b.note||'').trim().slice(0,255)||null):o.note;
+  const thr=await getThreshold(),twoOn=await featOn(env,'feature.two_step_approval',o.branch_id);
+  if(twoOn&&Math.max(Number(o.amount),amt)>=thr){
+   try{
+    const reqRow=(await dbUse('approval_requests',{m:'POST',b:{branch_id:o.branch_id,offering_id:o.id,action:'edit',amount:Math.max(+o.amount,amt),payload:{amount:amt,category:cat,sender,note,old_amount:+o.amount},reason,requested_by:tag,requested_by_staff_id:isDev?null:me.id,requested_by_dev_id:isDev?devUser.id:null},prefer:'return=representation'}))?.[0]||null;
+    await auditStaff('approval_requested',`edit #${o.id} (${money(o.amount)} -> ${money(amt)}) - ${reason}`);
+    return json({ok:true,pending:true,request_id:reqRow?.id,message:`Approval required (amount ≥ ${money(thr)}). Edit request sent to a second authorised approver.`});
+   }catch(e){if(e.code==='23505')return bad('There is already a pending approval request for this entry.');throw e}}
+  if(isDev){
+   await devSb(env,devJwt,`offerings?id=eq.${o.id}`,{m:'PATCH',b:{amount:amt,category:cat,sender,note},prefer:'return=minimal'});
+   await devSb(env,devJwt,`pledge_payments?offering_id=eq.${o.id}`,{m:'PATCH',b:{amount:amt},prefer:'return=minimal'}).catch(()=>{});
+   await auditDev('edit_offering',`#${o.id} ${money(o.amount)} -> ${money(amt)} - ${reason}`);
+   return json({ok:true,message:'Entry updated.'})}
+  const m=await rpc(env,'edit_offering',{p_id:o.id,p_amount:amt,p_category:cat,p_sender:sender,p_note:note,p_reason:reason,p_by:tag,p_branch:isSuper?null:me.branch_id,p_audit:true});
+  return m==='Entry updated.'?json({ok:true,message:m}):bad(m)}
  return bad('Not found',404)}
 
 /* ---- hidden Developer app (/dev/): RLS-enforced via authenticated JWT with khi_role='developer' ---- */
@@ -411,13 +659,33 @@ async function devRoute(req,env,p,q,b,ip){
   return json({login:true})}
  if(p==='/api/dev/login'&&post){
   const un=String(b.username||'').trim(),id='d:'+un.toLowerCase();
-  if(await rpc(env,'login_locked',{p_ident:id,p_ip:ip}))return bad('Too many failed attempts. Please wait 15 minutes and try again.',429);
+  if(await rpc(env,'login_locked',{p_ident:id,p_ip:ip}))return bad('Too many failed attempts. Please wait 15 minutes or ask the Super Admin to unlock.',429);
   const devId=await rpc(env,'dev_login',{p_username:un,p_password:String(b.password||'')});
   if(!devId){await rpc(env,'login_fail',{p_ident:id,p_ip:ip});return bad('Invalid login or account disabled.',401)}
+  if(await featOn(env,'feature.login_otp',null)){
+   const code=randOtp();
+   const challenge=await rpc(env,'create_login_otp',{p_role:'developer',p_user_id:devId,p_code:code,p_ttl_seconds:600});
+   const jwtTmp=await mkDevJwt(env,devId);
+   const dRow=(await devSb(env,jwtTmp,`dev_accounts?id=eq.${devId}&select=full_name,email`).catch(()=>[]))[0];
+   const sentTo=await sendOtpEmail(env,dRow?.email,dRow?.full_name||un,'developer',code);
+   return json({ok:true,otp_required:true,challenge,sent_to:sentTo})}
   await rpc(env,'login_clear',{p_ident:id});
   const jwt=await mkDevJwt(env,devId);
   await devSb(env,jwt,'dev_audit',{m:'POST',b:{dev_id:devId,action:'login',detail:un,ip},prefer:'return=minimal'}).catch(()=>{});
   return json({ok:true},200,[await mkCookie(env,devId,'khd'),CLEAR_S])}
+ if(p==='/api/dev/otp'&&post){
+  const vr=(await rpc(env,'verify_login_otp',{p_token:String(b.challenge||''),p_code:String(b.code||'')}))[0];
+  if(!vr||!vr.ok||vr.role!=='developer'){
+   if(vr?.user_id){const jt=await mkDevJwt(env,vr.user_id);const dr=(await devSb(env,jt,`dev_accounts?id=eq.${vr.user_id}&select=username`).catch(()=>[]))[0];if(dr)await rpc(env,'login_fail',{p_ident:'d:'+dr.username.toLowerCase(),p_ip:ip})}
+   return bad(vr?.err||'Invalid verification code.',401)}
+  const jwt=await mkDevJwt(env,vr.user_id);
+  const d=(await devSb(env,jwt,`dev_accounts?id=eq.${vr.user_id}&active=eq.true&select=id,username,full_name,active`))[0];
+  if(!d)return bad('Not found',404);
+  const id='d:'+d.username.toLowerCase();
+  if(await rpc(env,'login_locked',{p_ident:id,p_ip:ip}))return bad('Too many failed attempts. Please wait 15 minutes.',429);
+  await rpc(env,'login_clear',{p_ident:id});
+  await devSb(env,jwt,'dev_audit',{m:'POST',b:{dev_id:d.id,action:'login_otp',detail:d.username,ip},prefer:'return=minimal'}).catch(()=>{});
+  return json({ok:true},200,[await mkCookie(env,d.id,'khd'),CLEAR_S])}
 
  const did=await who(env,req,'khd');if(!did)return bad('Not found',404);
  const jwt=await mkDevJwt(env,did);
@@ -446,10 +714,12 @@ async function devRoute(req,env,p,q,b,ip){
   else await devSb(env,jwt,'feature_flags',{m:'POST',b:{key,unit_id:uid,enabled:on},prefer:'return=minimal'});
   await audit('flag_set',`${key}@${uid??'global'}=${on}`);return json({ok:true,message:`${key} set to ${on?'ON':'OFF'}.`})}
  if(p==='/api/dev/users'){
-  if(!post){const [st,ms,ps,ds,brs]=await Promise.all([devSb(env,jwt,'staff?select=id,role,branch_id,slot,full_name,username,active,privileges&order=id.asc'),devSb(env,jwt,'members?select=id,branch_id,full_name,phone,must_change,birth_date,marriage_date,department&order=id.asc'),devSb(env,jwt,'people?order=id.asc&limit=300'),devSb(env,jwt,'dev_accounts?select=id,username,full_name,active,created_at&order=id.asc'),devSb(env,jwt,'branches?select=*&order=is_main.desc,name.asc')]);
-   const bn=Object.fromEntries((brs||[]).map(x=>[x.id,unitLabel(x)]));
-   return json({staff:(st||[]).map(s=>({...s,unit:s.branch_id?bn[s.branch_id]:'All'})),members:(ms||[]).map(m=>({...m,unit:bn[m.branch_id]||''})),people:(ps||[]).map(x=>({...x,unit:bn[x.branch_id]||''})),devAccounts:ds||[],units:(brs||[]).map(x=>({...x,label:unitLabel(x)})),grantable:GRANT})}
+  if(!post){const [st,ms,ps,ds,brs,lks]=await Promise.all([devSb(env,jwt,'staff?select=id,role,branch_id,slot,full_name,username,active,privileges&order=id.asc'),devSb(env,jwt,'members?select=id,branch_id,full_name,phone,must_change,birth_date,marriage_date,department&order=id.asc'),devSb(env,jwt,'people?order=id.asc&limit=300'),devSb(env,jwt,'dev_accounts?select=id,username,full_name,active,created_at&order=id.asc'),devSb(env,jwt,'branches?select=*&order=is_main.desc,name.asc'),devRpc(env,jwt,'dev_locked_idents',{}).catch(()=>[])]);
+   const bn=Object.fromEntries((brs||[]).map(x=>[x.id,unitLabel(x)])),lkSet=new Set((lks||[]).map(x=>x.ident));
+   return json({staff:(st||[]).map(s=>({...s,unit:s.branch_id?bn[s.branch_id]:'All',locked:lkSet.has('s:'+String(s.username||'').toLowerCase())})),members:(ms||[]).map(m=>({...m,unit:bn[m.branch_id]||'',locked:lkSet.has(m.phone)})),people:(ps||[]).map(x=>({...x,unit:bn[x.branch_id]||''})),devAccounts:(ds||[]).map(a=>({...a,locked:lkSet.has('d:'+String(a.username||'').toLowerCase())})),units:(brs||[]).map(x=>({...x,label:unitLabel(x)})),grantable:GRANT,locks:lks||[]})}
   const t=b.target;
+  if(t==='unlock'){const ident=String(b.ident||'').trim();if(!ident)return bad('Account identifier required.');
+   await devRpc(env,jwt,'dev_unlock_login',{p_ident:ident});await audit('dev_unlock',ident);return json({ok:true,message:'Account unlocked.'})}
   if(t==='staff'){
    if(b.a==='create'){await devRpc(env,jwt,'dev_create_staff',{p_role:b.role||'secretary',p_branch:b.role==='superadmin'?null:+b.branch,p_slot:b.role==='secretary'?(b.slot||'main'):null,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:b.role==='admin'?(b.privileges||[]):[]});
     await audit('dev_create_staff',`${b.role}:${b.username}`);return json({ok:true,message:'Staff account created.'})}
@@ -487,7 +757,7 @@ async function devRoute(req,env,p,q,b,ip){
    if(b.a==='create'){await devSb(env,jwt,'branches',{m:'POST',b:{name:String(b.name||'').trim(),kind:b.kind||'fellowship',parent_id:b.parent_id?+b.parent_id:null,is_main:!!b.is_main,momo_number:b.momo_number||null},prefer:'return=minimal'});await audit('create_unit',b.name);return json({ok:true,message:'Unit added.'})}
    if(b.a==='update'){await devSb(env,jwt,`branches?id=eq.${+b.id}`,{m:'PATCH',b:{name:String(b.name||'').trim(),kind:b.kind,parent_id:b.parent_id?+b.parent_id:null,momo_number:b.momo_number||null},prefer:'return=minimal'});await audit('update_unit',b.name);return json({ok:true,message:'Unit saved.'})}
    if(b.a==='delete'){await devSb(env,jwt,`branches?id=eq.${+b.id}`,{m:'DELETE',prefer:'return=minimal'});await audit('delete_unit','#'+b.id);return json({ok:true,message:'Unit deleted.'})}}}
- if(p==='/api/dev/data'){const ALLOWED=['offerings','pledges','pledge_payments','events','programs','services','attendance','notifications','assets','audit_log','dev_audit'];
+ if(p==='/api/dev/data'){const ALLOWED=['offerings','pledges','pledge_payments','expenses','approval_requests','events','programs','services','attendance','notifications','assets','audit_log','dev_audit'];
   const tbl=String(q.table||b.table||'offerings');if(!ALLOWED.includes(tbl))return bad('Unknown table.');
   if(!post)return json({table:tbl,tables:ALLOWED,rows:await devSb(env,jwt,`${tbl}?order=id.desc&limit=200`)});
   const row=typeof b.row==='string'?JSON.parse(b.row):b.row;
