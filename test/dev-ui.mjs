@@ -33,19 +33,23 @@ await m.until(()=>m.t().includes('Member Sign in'));
 m.fill('Phone number','0951234567');m.fill('Password','demo1234');m.submit(m.form('Member Sign in'));
 ok('branding (member): NIPA FELLOWSHIP · KHI CITY CENTRE beside logo',await m.until(()=>m.q('header')?.textContent.includes('NIPA FELLOWSHIP · KHI CITY CENTRE')));
 
+const finishOtp=async x=>{await x.until(()=>x.t().includes('Demo verification code:'));const code=x.t().match(/Demo verification code:\s*(\d{6})/)?.[1]||'';x.fill('6-digit verification code',code);x.submit(x.form('Verification'))};
+const staffLogin=async(username,app)=>{const r=await api('/api/staff/login',{username,password:'demo1234',app});if(r?.otp_required)return api('/api/staff/otp',{challenge:r.challenge,code:r.demo_code});return r};
+const devLogin=async(username='timothy')=>{const r=await api('/api/dev/login',{username,password:'demo1234'});if(r?.otp_required)return api('/api/dev/otp',{challenge:r.challenge,code:r.demo_code});return r};
+
 let sc=boot('/secretary/');
 await sc.until(()=>sc.t().includes('Secretary Sign in'));
-sc.fill('Username','nipa1');sc.fill('Password','demo1234');sc.submit(sc.form('Secretary Sign in'));
+sc.fill('Username','nipa1');sc.fill('Password','demo1234');sc.submit(sc.form('Secretary Sign in'));await finishOtp(sc);
 ok('branding (secretary): NIPA FELLOWSHIP · KHI CITY CENTRE beside logo',await sc.until(()=>sc.q('header')?.textContent.includes('NIPA FELLOWSHIP · KHI CITY CENTRE')));
 
 let ad=boot('/admin/');
 await ad.until(()=>ad.t().includes('Admin Sign in'));
-ad.fill('Username','nipaadmin');ad.fill('Password','demo1234');ad.submit(ad.form('Admin Sign in'));
+ad.fill('Username','nipaadmin');ad.fill('Password','demo1234');ad.submit(ad.form('Admin Sign in'));await finishOtp(ad);
 ok('branding (admin): NIPA FELLOWSHIP · KHI CITY CENTRE beside logo',await ad.until(()=>ad.q('header')?.textContent.includes('NIPA FELLOWSHIP · KHI CITY CENTRE')));
 
 let sa=boot('/superadmin/');
 await sa.until(()=>sa.t().includes('Super Admin Sign in'));
-sa.fill('Username','super');sa.fill('Password','demo1234');sa.submit(sa.form('Super Admin Sign in'));
+sa.fill('Username','super');sa.fill('Password','demo1234');sa.submit(sa.form('Super Admin Sign in'));await finishOtp(sa);
 ok('branding (superadmin): KINGDOM HERALDS INTERNATIONAL CHURCH only',await sa.until(()=>{const h=sa.q('header div')?.textContent||'';return h==='KINGDOM HERALDS INTERNATIONAL CHURCH'}));
 
 /* ---------- 2. Hidden /dev/ & 404 invisibility ---------- */
@@ -56,7 +60,7 @@ ok('launcher: /dev/ is hidden from app launcher',!l.t().toLowerCase().includes('
 const bad=async(p,b)=>api(p,b).then(()=>false,e=>e.status===404);
 ok('unauth: /api/dev/me returns 404',await bad('/api/dev/me'));
 ok('unauth: /api/dev/flags returns 404',await bad('/api/dev/flags'));
-await api('/api/staff/login',{username:'super',password:'demo1234',app:'superadmin'});
+await staffLogin('super','superadmin');
 ok('superadmin: /api/dev/gate returns 404',await bad('/api/dev/gate'));
 ok('superadmin: /api/dev/users returns 404',await bad('/api/dev/users'));
 await api('/api/staff/logout',{});
@@ -64,8 +68,8 @@ await api('/api/staff/logout',{});
 /* ---------- 3. Developer UI (/dev/): Flags, Stubs, CRUD, Impersonation ---------- */
 let dv=boot('/dev/');
 ok('/dev/: Developer Sign in opens when no other role signed in',await dv.until(()=>dv.t().includes('Developer Sign in')));
-dv.fill('Username','timothy');dv.fill('Password','demo1234');dv.submit(dv.form('Developer Sign in'));
-ok('/dev/: Timothy logs into Developer console with all 4 tabs',await dv.until(()=>dv.t().includes('Developer · Timothy')&&['Flags & Stubs','Users & Roles','Settings & Units','Data'].every(x=>dv.btn(x))));
+dv.fill('Username','timothy');dv.fill('Password','demo1234');dv.submit(dv.form('Developer Sign in'));await finishOtp(dv);
+ok('/dev/: Timothy logs into Developer console with all tabs',await dv.until(()=>dv.t().includes('Developer · Timothy')&&['Flags & Stubs','Users & Roles','Settings & Units','Data'].every(x=>dv.btn(x))));
 ok('/dev/: future stubs are listed and OFF by default',dv.t().includes('SMS notifications')&&dv.t().includes('Mobile-money payments')&&dv.t().includes('Backups and data export')&&dv.t().includes('Multi-language')&&dv.t().includes('API keys')&&dv.t().includes('Payments reports'));
 
 // Toggle a stub ON via UI
@@ -97,7 +101,7 @@ dv.set(dv.q('select'),'dev_audit');
 ok('/dev/: developer audit shows actions',await dv.until(()=>dv.t().includes('flag_set')&&dv.t().includes('dev_create_person')));
 
 /* ---------- 4. Feature flags actually hide/disable features across apps (API + UI) ---------- */
-await api('/api/dev/login',{username:'timothy',password:'demo1234'});
+await devLogin('timothy');
 // Verify stub never leaked to public /api/features
 const pubFeats=await api('/api/features');
 ok('stubs never revealed in /api/features',!Object.keys(pubFeats).some(k=>k.startsWith('stub.')));
@@ -122,11 +126,12 @@ ok('flag: feature.departments OFF empties departments list',(await api('/api/dep
 
 // secretary.menu.reports OFF + admin.menu.audit OFF
 await api('/api/dev/flags',{key:'secretary.menu.reports',unit_id:null,enabled:false});
-await api('/api/staff/login',{username:'sec1',password:'demo1234',app:'secretary'});
+await staffLogin('sec1','secretary');
 ok('flag: secretary.menu.reports OFF disables reports endpoint',await api('/api/staff/report?kind=offerings&from=2020-01-01&to=2030-01-01').then(()=>false,e=>e.status===403));
 
+await devLogin('timothy');
 await api('/api/dev/flags',{key:'admin.menu.audit',unit_id:null,enabled:false});
-await api('/api/staff/login',{username:'super',password:'demo1234',app:'superadmin'});
+await staffLogin('super','superadmin');
 const admMe=await api('/api/admin/me');
 ok('flag: admin.menu.audit OFF hides audit tab and blocks endpoint',!admMe.tabs.includes('audit')&&await api('/api/admin/audit').then(()=>false,e=>e.status===403));
 ok('branding: superadmin /api/admin/me returns KINGDOM HERALDS INTERNATIONAL CHURCH',admMe.brand==='KINGDOM HERALDS INTERNATIONAL CHURCH');
@@ -144,7 +149,7 @@ ok('flag: app.member OFF blocks member login',await api('/api/member/login',{pho
 
 /* ---------- 5. Developer Church powers (Super Admin + scoped unit Admin) ---------- */
 // Turn OFF admin/superadmin apps, menu flags, and assets setting — developer must still have ALL powers
-await api('/api/dev/login',{username:'timothy',password:'demo1234'});
+await devLogin('timothy');
 await api('/api/dev/flags',{key:'app.superadmin',unit_id:null,enabled:false});
 await api('/api/dev/flags',{key:'app.admin',unit_id:null,enabled:false});
 await api('/api/dev/flags',{key:'admin.menu.events',unit_id:null,enabled:false});
@@ -191,11 +196,11 @@ ok('dev admin (unit_id=2): unit-scoped mutation succeeds and logs to dev_audit',
 // Developer UI: Church tab with scope picker and admin.jsx tabs
 let dvc=boot('/dev/');
 await dvc.until(()=>dvc.t().includes('Developer Sign in'));
-dvc.fill('Username','timothy');dvc.fill('Password','demo1234');dvc.submit(dvc.form('Developer Sign in'));
+dvc.fill('Username','timothy');dvc.fill('Password','demo1234');dvc.submit(dvc.form('Developer Sign in'));await finishOtp(dvc);
 await dvc.until(()=>dvc.btn('Church'));
 dvc.click(dvc.btn('Church'));
-ok('/dev/ UI: Church tab renders scope picker and all 13 admin tabs',
- await dvc.until(()=>dvc.t().includes('Whole church (Super Admin)')&&['Overview','Units','Admins','Leaders','Accounts','Members','Events','Programs','Attendance','Reports','Assets','Audit log','Church profile'].every(x=>dvc.btn(x))));
+ok('/dev/ UI: Church tab renders scope picker and all 13+ admin tabs',
+ await dvc.until(()=>dvc.t().includes('Whole church (Super Admin)')&&['Overview','Units','Admins','Leaders','Accounts','Members','Events','Programs','Expenses','Approvals','Attendance','Reports','Assets','Audit log','Church profile'].every(x=>dvc.btn(x))));
 dvc.click(dvc.btn('Units'));
 ok('/dev/ UI: Church -> Units tab reuses admin.jsx Units view',await dvc.until(()=>dvc.t().includes('Add a centre, branch or fellowship')));
 const scopeSel=dvc.qa('select').find(s=>[...s.options].some(o=>o.textContent.includes('Whole church (Super Admin)')));
@@ -204,14 +209,14 @@ ok('/dev/ UI: switching scope to NIPA FELLOWSHIP acts as unit Admin and hides Su
  await dvc.until(()=>dvc.t().includes('Acting as Admin of NIPA FELLOWSHIP')&&!dvc.btn('Units')&&!dvc.btn('Leaders')&&!!dvc.btn('Audit log')));
 
 // Re-enable apps & confirm Super Admin and Admin still get 404 on /dev/ and /api/dev/* and cannot escalate via unit_id
-await api('/api/dev/login',{username:'timothy',password:'demo1234'});
+await devLogin('timothy');
 await api('/api/dev/flags',{key:'app.superadmin',unit_id:null,enabled:true});
 await api('/api/dev/flags',{key:'app.admin',unit_id:null,enabled:true});
 await api('/api/dev/logout',{});
 
-await api('/api/staff/login',{username:'super',password:'demo1234',app:'superadmin'});
+await staffLogin('super','superadmin');
 ok('superadmin: /api/dev/* still returns 404',await bad('/api/dev/gate')&&await bad('/api/dev/me')&&await bad('/api/dev/flags')&&await bad('/api/dev/users'));
-await api('/api/staff/login',{username:'nipaadmin',password:'demo1234',app:'admin'});
+await staffLogin('nipaadmin','admin');
 ok('admin: /api/dev/* still returns 404',await bad('/api/dev/gate')&&await bad('/api/dev/me')&&await bad('/api/dev/flags')&&await bad('/api/dev/users'));
 const nipaOv=await api('/api/admin/overview?unit_id=1');
 ok('admin: passing ?unit_id=1 does NOT escalate scope',nipaOv.rows.length===1&&nipaOv.rows[0].id===2);

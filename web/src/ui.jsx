@@ -24,6 +24,31 @@ export function BrandLogo({sub,title='Kingdom Heralds International',center=fals
   <div><div style={{fontWeight:700,lineHeight:1.2}}>{title}</div>{sub&&<div className="muted" style={{fontSize:'.8rem',lineHeight:1.25}}>{sub}</div>}</div>
  </div>;
 }
+export function ReceiptCard({r,church,onClose}){
+ if(!r)return null;
+ return <div className="card receipt-card" style={{border:'2px solid var(--line)'}}>
+  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:'1rem',marginBottom:'.8rem'}}>
+   <BrandLogo sub={r.brand||r.branch||r.bn}/>
+   <div style={{textAlign:'right'}}><b>OFFICIAL GIVING RECEIPT</b><div style={{fontFamily:'monospace',fontSize:'1.05rem',fontWeight:700}}>{r.receipt_no}</div></div>
+  </div>
+  {r.voided&&<p className="err">VOIDED{r.void_reason?': '+r.void_reason:''}</p>}
+  <table><tbody>
+   <tr><th>Date</th><td>{r.date||String(r.created_at||'').slice(0,10)}</td></tr>
+   <tr><th>Church</th><td>{r.branch||r.bn||'—'}</td></tr>
+   <tr><th>Received from</th><td>{r.sender||'—'}</td></tr>
+   <tr><th>Category</th><td>{r.category}</td></tr>
+   <tr><th>Method</th><td>{r.type}</td></tr>
+   <tr><th>Amount</th><td><b>{money(r.amount)}</b></td></tr>
+   {r.recorded_by&&<tr><th>Recorded by</th><td>{r.recorded_by}</td></tr>}
+   {r.note&&<tr><th>Note</th><td>{r.note}</td></tr>}
+  </tbody></table>
+  {church?.email&&<p className="muted" style={{marginTop:'.6rem'}}>Kingdom Heralds International · {church.email}</p>}
+  <div className="noprint" style={{display:'flex',gap:'.5rem',marginTop:'.8rem',flexWrap:'wrap'}}>
+   <button type="button" style={{width:'auto'}} onClick={()=>window.print()}>Print receipt</button>
+   {onClose&&<button type="button" className="ghost" style={{width:'auto'}} onClick={onClose}>Close</button>}
+  </div>
+ </div>;
+}
 export const Top=({sub,links=[],onLogout})=><header><BrandLogo sub={sub}/><nav>{links.map(([to,l])=><Link key={to} to={to}>{l}</Link>)}<a href="#" onClick={e=>{e.preventDefault();onLogout()}}>Log out</a></nav></header>;
 export function useLogout(){const nav=useNavigate();return async()=>{await api('/api/staff/logout',{}).catch(()=>{});nav('/')}}
 export function useData(path){const nav=useNavigate(),[d,setD]=useState(null),[err,setErr]=useState('');

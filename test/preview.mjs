@@ -38,9 +38,10 @@ a.click(a.qa('input[type=checkbox]')[0]);ok('register: marriage date appears whe
 a.set(a.qa('input[type=date]')[1],'2020-06-06');a.click(a.qa('input[type=checkbox]')[1]);a.submit(a.form('Create account'));
 ok('register: success -> back to sign in',await a.until(()=>a.t().includes('Registration successful')));
 
+const finishOtp=async x=>{await x.until(()=>x.t().includes('Demo verification code:'));const code=x.t().match(/Demo verification code:\s*(\d{6})/)?.[1]||'';x.fill('6-digit verification code',code);x.submit(x.form('Verification'))};
 /* ---------- SECRETARY ---------- */
 let b=await open('/secretary/');ok('secretary: login screen',await b.until(()=>b.t().includes('Secretary Sign in')));
-b.fill('Username','sec1');b.fill('Password','demo1234');b.submit(b.form('Secretary Sign in'));
+b.fill('Username','sec1');b.fill('Password','demo1234');b.submit(b.form('Secretary Sign in'));await finishOtp(b);
 ok('secretary: dashboard',await b.until(()=>b.t().includes('Record physical cash')&&b.t().includes('Record pledge payment')&&b.t().includes('Main Secretary')));
 b.fill('Amount (K)','75.50');b.submit(b.form('Record physical cash'));ok('secretary: record cash',await b.until(()=>b.t().includes('Recorded K 75.50.')));
 const ms=b.qa('select').find(s=>s.textContent.includes('1. Choose member'));b.set(ms,'1');
@@ -58,16 +59,16 @@ b.click(b.btn('Reports'));ok('secretary: reports (Main only)',await b.until(()=>
 
 /* ---------- ADMIN OF ONE CHURCH (limited privileges) ---------- */
 let n=await open('/admin/');ok('admin: login screen',await n.until(()=>n.t().includes('Admin Sign in')));
-n.fill('Username','nipaadmin');n.fill('Password','demo1234');n.submit(n.form('Admin Sign in'));
+n.fill('Username','nipaadmin');n.fill('Password','demo1234');n.submit(n.form('Admin Sign in'));await finishOtp(n);
 ok('limited admin: only own church + only allowed tabs',await n.until(()=>n.t().includes('Churches · live')&&n.t().includes('NIPA FELLOWSHIP')&&!n.t().includes('Matero')&&n.btn('Events')&&n.btn('Attendance')&&n.btn('Reports')&&!n.btn('Units')&&!n.btn('Admins')&&!n.btn('Leaders')&&!n.btn('Accounts')&&!n.btn('Members')&&!n.btn('Audit log')&&!n.btn('Church profile')&&!n.btn('Assets')));
 n.click(n.btn('Events'));await n.until(()=>n.t().includes('Add event'));n.fill('Event title','Nipa Youth Night',n.form('Add event'));n.set(n.q('input[type=date]'),'2030-01-01');n.fill('Venue','Nipa hall',n.form('Add event'));n.submit(n.form('Add event'));
 ok('limited admin: must choose a church (cannot publish to everyone)',await n.until(()=>n.t().includes('Choose the church this is for.')));
-let k=await open('/admin/');await k.until(()=>k.t().includes('Admin Sign in'));k.fill('Username','admin');k.fill('Password','demo1234');k.submit(k.form('Admin Sign in'));
+let k=await open('/admin/');await k.until(()=>k.t().includes('Admin Sign in'));k.fill('Username','admin');k.fill('Password','demo1234');k.submit(k.form('Admin Sign in'));await finishOtp(k);
 ok('city centre admin: own area (Matero, Nipa) + Accounts/Members/Programs/Audit, no Super Admin tabs',await k.until(()=>k.t().includes('Matero Branch')&&k.t().includes('NIPA FELLOWSHIP')&&k.btn('Accounts')&&k.btn('Members')&&k.btn('Programs')&&k.btn('Audit log')&&!k.btn('Units')&&!k.btn('Admins')&&!k.btn('Leaders')&&!k.btn('Church profile')&&!k.btn('Assets')));
 
 /* ---------- SUPER ADMIN (everything) ---------- */
 let c=await open('/superadmin/');ok('super: login screen',await c.until(()=>c.t().includes('Super Admin Sign in')));
-c.fill('Username','super');c.fill('Password','demo1234');c.submit(c.form('Super Admin Sign in'));
+c.fill('Username','super');c.fill('Password','demo1234');c.submit(c.form('Super Admin Sign in'));await finishOtp(c);
 ok('super: overview of all churches with labels + every tab',await c.until(()=>c.t().includes('Churches · live')&&c.t().includes('Matero Branch')&&['Units','Admins','Leaders','Accounts','Members','Events','Programs','Attendance','Reports','Audit log','Church profile'].every(x=>c.btn(x))));
 c.click(c.btn('Units'));await c.until(()=>c.t().includes('Add a centre, branch or fellowship'));c.fill('Name, e.g. Lusaka','Lusaka',c.form('Add a centre'));
 ok('super: live label preview ("Lusaka Centre")',await c.until(()=>c.t().includes('It will appear as: Lusaka Centre')));c.submit(c.form('Add a centre'));ok('super: add centre',await c.until(()=>c.t().includes('Lusaka Centre added.')));

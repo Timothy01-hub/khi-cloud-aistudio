@@ -1,12 +1,13 @@
 import {useCallback,useEffect,useState} from 'react';
 import {Link,useNavigate,useSearchParams} from 'react-router-dom';
 import {api} from './api.js';
-import {BrandLogo} from './ui.jsx';
+import {BrandLogo,ReceiptCard,Scroll} from './ui.jsx';
 
 const money=n=>'K '+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmt=d=>new Date(d+'T00:00:00Z').toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
 const useLoginBody=()=>useEffect(()=>{document.body.classList.add('login');return()=>document.body.classList.remove('login')},[]);
 const Install=({text})=><a href="#" id="install" hidden onClick={e=>{e.preventDefault();window.khInstall&&window.khInstall()}}>{text}</a>;
+const small={padding:'.2rem .6rem',width:'auto'};
 
 export function Login(){useLoginBody();const nav=useNavigate(),[sp]=useSearchParams(),[e,setE]=useState('');
  const submit=async ev=>{ev.preventDefault();const f=new FormData(ev.target);setE('');
@@ -50,31 +51,79 @@ export function About({brand}){const [p,setP]=useState({vision:'To reach all nat
   <p><b>Our vision</b><br/>{p.vision}.</p><p><b>Our mission</b><br/>{p.mission}</p>
   <p><b>Contact us</b><br/><a href={'mailto:'+p.email}>{p.email}</a></p></div>}
 
-export function HomeView({d,tab,msg,alerts,act,go,onLogout}){
+export function GivingView({giving,stmtYear,onYearChange,openReceipt,setOpenReceipt}){
+ if(!giving)return <p className="muted">Loading…</p>;
+ const st=giving.statement||{year:stmtYear,years:[],rows:[],byType:{},byMethod:{},total:0,member:{},profile:{}};
+ return <>
+  {openReceipt&&<ReceiptCard r={openReceipt} church={st.profile} onClose={()=>setOpenReceipt(null)}/>}
+  <div className={'card'+(openReceipt?' noprint':' noprint')}>
+   <h3>My giving receipts</h3>
+   {!giving.receipts?.length?<p className="muted">No receipts recorded yet.</p>:<Scroll><table>
+    <thead><tr><th>Receipt No</th><th>Date</th><th>Category</th><th>Method</th><th className="r">Amount</th><th>Status</th><th/></tr></thead>
+    <tbody>{giving.receipts.map(r=><tr key={r.id} style={r.voided?{opacity:.45,textDecoration:'line-through'}:undefined}>
+     <td style={{fontFamily:'monospace'}}>{r.receipt_no}</td><td>{r.date}</td><td>{r.category}</td><td><span className={'tag '+r.type}>{r.type}</span></td>
+     <td className="r">{money(r.amount)}</td><td>{r.voided?'Voided':'Issued'}</td>
+     <td><button type="button" className="ghost" style={small} onClick={()=>setOpenReceipt(r)}>Receipt</button></td>
+    </tr>)}</tbody></table></Scroll>}
+  </div>
+  <div className={'card'+(openReceipt?' noprint':'')}>
+   <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:'1rem',marginBottom:'.8rem'}}>
+    <BrandLogo sub={st.member?.brand||st.member?.branch}/>
+    <div style={{textAlign:'right'}}><b>{`ANNUAL GIVING STATEMENT (${st.year})`}</b><div className="muted">{st.member?.full_name} · {st.member?.phone}</div></div>
+   </div>
+   <div className="noprint" style={{display:'flex',gap:'.6rem',alignItems:'center',flexWrap:'wrap',marginBottom:'.8rem'}}>
+    <label className="muted" style={{display:'inline-flex',alignItems:'center',gap:'.4rem'}}>Year
+     <select aria-label="Statement year" style={{width:'auto'}} value={stmtYear||st.year} onChange={e=>onYearChange?.(e.target.value)}>
+      {(st.years?.length?st.years:[st.year]).map(y=><option key={y} value={y}>{y}</option>)}
+     </select>
+    </label>
+    <button type="button" style={{width:'auto'}} onClick={()=>{setOpenReceipt(null);window.print()}}>Download yearly statement</button>
+   </div>
+   <h4>{`Totals by giving type (${st.year})`}</h4>
+   {!Object.keys(st.byType||{}).length?<p className="muted">No active contributions recorded in {st.year}.</p>:<>
+    <Scroll><table><thead><tr><th>Type / Category</th><th className="r">Total given</th></tr></thead><tbody>
+     {Object.entries(st.byType).map(([k,v])=><tr key={k}><td>{k}</td><td className="r">{money(v)}</td></tr>)}
+     <tr><td><b>{`Total (${st.year})`}</b></td><td className="r"><b>{money(st.total)}</b></td></tr>
+    </tbody></table></Scroll>
+    <h4 style={{marginTop:'.9rem'}}>{`Itemized contributions (${st.year})`}</h4>
+    <Scroll><table><thead><tr><th>Date</th><th>Receipt No</th><th>Category</th><th>Method</th><th>Church</th><th className="r">Amount</th></tr></thead><tbody>
+     {st.rows.map(r=><tr key={r.id}><td>{r.date}</td><td style={{fontFamily:'monospace'}}>{r.receipt_no}</td><td>{r.category}</td><td>{r.type}</td><td>{r.branch}</td><td className="r">{money(r.amount)}</td></tr>)}
+    </tbody></table></Scroll>
+   </>}
+   {st.profile?.email&&<p className="muted" style={{marginTop:'.8rem'}}>Official statement issued by Kingdom Heralds International · {st.profile.email}</p>}
+  </div>
+ </>;
+}
+
+export function HomeView({d,tab,msg,alerts,giving,stmtYear,onYearChange,openReceipt,setOpenReceipt,act,go,onLogout}){
  const f=d.features||{},show=k=>f[k]!==false;
  const nv=(k,l)=>show('member.menu.'+k)?<a href="#" key={k} className={tab===k?'on':''} onClick={e=>{e.preventDefault();go(k)}}>{l}</a>:null;
  const pledge=async e=>{e.preventDefault();const f=e.currentTarget,x=new FormData(f),r=await act('/api/member/pledge',{program:x.get('program'),amount:x.get('amount')});if(r)f.reset()};
  const pw=async e=>{e.preventDefault();const f=e.currentTarget,x=new FormData(f),r=await act('/api/member/password',{old:x.get('old'),new:x.get('new'),new2:x.get('new2')});if(r)f.reset()};
  return <><header><div style={{display:'flex',alignItems:'center',gap:'.6rem',flexWrap:'wrap'}}><BrandLogo sub={d.me.brand||d.me.branch}/> <span className="muted">· {d.me.name}</span></div>
-  <nav>{nv('events','Events')}{nv('pledges','Pledges')}{nv('alerts',<>Alerts <span className="badge" id="bc">{d.unread}</span></>)}{nv('account','Account')}{nv('about','About us')}<Install text="⬇ Install app"/><a href="#" onClick={e=>{e.preventDefault();onLogout()}}>Log out</a></nav></header>
+  <nav>{nv('events','Events')}{nv('pledges','Pledges')}{show('feature.receipts')&&<a href="#" className={tab==='giving'?'on':''} onClick={e=>{e.preventDefault();go('giving')}}>Giving</a>}{nv('alerts',<>Alerts <span className="badge" id="bc">{d.unread}</span></>)}{nv('account','Account')}{nv('about','About us')}<Install text="⬇ Install app"/><a href="#" onClick={e=>{e.preventDefault();onLogout()}}>Log out</a></nav></header>
  <main>{msg&&<p className={msg.startsWith('Error')?'err':'ok'}>{msg}</p>}
-  {show('feature.self_checkin')&&d.services.map(s=><div className="card" key={s.id}><b>⛪ {s.type} is on today</b>{s.here?<p>✔ You are checked in. God bless you!</p>:<button onClick={()=>act('/api/member/checkin',{id:s.id})}>I am here — check me in</button>}</div>)}
+  {show('feature.self_checkin')&&d.services.map(s=><div className="card noprint" key={s.id}><b>⛪ {s.type} is on today</b>{s.here?<p>✔ You are checked in. God bless you!</p>:<button onClick={()=>act('/api/member/checkin',{id:s.id})}>I am here — check me in</button>}</div>)}
   {tab==='events'&&show('member.menu.events')&&<><h3>Upcoming events</h3>{d.events.length?d.events.map(e=><div className="card ev" key={e.id}>{e.banner&&<img src={e.banner} alt=""/>}<div><h3>{e.title}{e.event_date===d.today&&<> <span className="badge">TODAY</span></>}</h3><p>📅 {fmt(e.event_date)}<br/>📍 {e.location}</p><p className="muted">{e.description}</p><Geo r={e} k={'e'+e.id}/></div></div>):<p className="muted">No upcoming events yet.</p>}</>}
   {tab==='pledges'&&show('member.menu.pledges')&&<>{d.programs.map(r=><div className="card ev" key={r.id}>{r.banner&&<img src={r.banner} alt=""/>}<div><h3>{r.title}</h3><p className="muted">{r.description}</p>{r.location&&<p>📍 {r.location}</p>}{r.deadline&&<p className="muted">Deadline: {fmt(r.deadline)}</p>}<Geo r={r} k={'g'+r.id}/></div></div>)}
    <form className="card" onSubmit={pledge}><h3>Make a pledge</h3><select name="program" required><option value="">Choose a program…</option>{d.programs.map(r=><option key={r.id} value={r.id}>{r.title}</option>)}</select>{!d.programs.length&&<p className="muted">No pledge programs are open right now.</p>}<input name="amount" type="number" min="1" step="0.01" placeholder="Pledge amount (K)" required/><button>Pledge</button></form>
    <h3>My pledges</h3>{d.pledges.length?d.pledges.map(r=>{const bal=r.amount-r.paid;return <div className="card" key={r.id}><b>{r.title}</b><div className="bar"><i style={{width:Math.min(100,Math.round(r.paid/r.amount*100))+'%'}}/></div><p>Pledged {money(r.amount)} · Paid {money(r.paid)} · <b>{bal>0?'Balance '+money(bal):'Fully paid ✔'}</b></p></div>}):<p className="muted">You have no pledges yet.</p>}</>}
+  {tab==='giving'&&show('feature.receipts')&&<GivingView giving={giving} stmtYear={stmtYear} onYearChange={onYearChange} openReceipt={openReceipt} setOpenReceipt={setOpenReceipt}/>}
   {tab==='alerts'&&show('member.menu.alerts')&&<><h3>Notifications</h3>{alerts===null?<p className="muted">Loading…</p>:alerts.length?alerts.map(n=><div className={'card '+(n.is_read?'':'new')} key={n.id}>{n.message}<div className="muted">{new Date(n.created_at).toLocaleString('en-GB',{timeZone:'Africa/Lusaka',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div></div>):<p className="muted">Nothing yet.</p>}</>}
   {tab==='about'&&show('member.menu.about')&&<About brand={d.me.brand||d.me.branch}/>}
   {tab==='account'&&show('member.menu.account')&&<>{d.me.mustChange&&<p className="err">Please set a new password to continue.</p>}<form className="card" onSubmit={pw}><h3>Change password</h3><input name="old" type="password" placeholder="Current password" required/><input name="new" type="password" placeholder="New password (6+)" required/><input name="new2" type="password" placeholder="Confirm new password" required/><button>Change password</button></form></>}
  </main></>}
 
-export function Home(){const nav=useNavigate(),[sp,setSp]=useSearchParams(),tab=sp.get('p')||'events',[d,setD]=useState(null),[msg,setMsg]=useState(''),[alerts,setAlerts]=useState(null);
- const load=useCallback(async()=>{try{setD(await api('/api/member/home'))}catch(x){x.status===401?nav('/'):setMsg('Error: '+x.message)}},[nav]);
+export function Home(){const nav=useNavigate(),[sp,setSp]=useSearchParams(),tab=sp.get('p')||'events',[d,setD]=useState(null),[msg,setMsg]=useState(''),[alerts,setAlerts]=useState(null),[giving,setGiving]=useState(null),[stmtYear,setStmtYear]=useState(''),[openReceipt,setOpenReceipt]=useState(null);
+ const load=useCallback(async()=>{try{const hd=await api('/api/member/home');setD(hd);setStmtYear(y=>y||String(hd.today||'').slice(0,4))}catch(x){x.status===401?nav('/'):setMsg('Error: '+x.message)}},[nav]);
  useEffect(()=>{load()},[load]);
  useEffect(()=>{if(!d)return;if(d.me.mustChange&&tab!=='account'&&d.features?.['member.menu.account']!==false){setSp({p:'account'},{replace:true});return}
-  if(d.features&&d.features['member.menu.'+tab]===false){const next=['events','pledges','alerts','account','about'].find(k=>d.features['member.menu.'+k]!==false);if(next&&next!==tab)setSp({p:next},{replace:true})}},[d,tab,setSp]);
+  if(tab==='giving'&&d.features?.['feature.receipts']===false){setSp({p:'events'},{replace:true});return}
+  if(tab!=='giving'&&d.features&&d.features['member.menu.'+tab]===false){const next=['events','pledges','alerts','account','about'].find(k=>d.features['member.menu.'+k]!==false);if(next&&next!==tab)setSp({p:next},{replace:true})}},[d,tab,setSp]);
  useEffect(()=>{if(tab==='alerts'&&d?.features?.['member.menu.alerts']!==false)api('/api/member/alerts').then(x=>{setAlerts(x.items);setD(v=>v&&{...v,unread:0})}).catch(()=>{})},[tab,d?.features]);
+ const loadGiving=useCallback(async y=>{try{const g=await api('/api/member/giving'+(y?'?year='+encodeURIComponent(y):''));setGiving(g)}catch(x){setMsg('Error: '+x.message)}},[]);
+ useEffect(()=>{if(tab==='giving'&&d?.features?.['feature.receipts']!==false)loadGiving(stmtYear||String(d.today||'').slice(0,4))},[tab,d?.features,d?.today,stmtYear,loadGiving]);
  useEffect(()=>{const t=setInterval(()=>api('/api/member/count').then(x=>setD(v=>v&&{...v,unread:x.unread})).catch(()=>{}),30000);return()=>clearInterval(t)},[]);
  const act=async(path,body)=>{try{const r=await api(path,body);setMsg(r.message||'');await load();return r}catch(x){setMsg('Error: '+x.message)}};
  if(!d)return <p className="muted" style={{padding:'2rem'}}>{msg||'Loading…'}</p>;
- return <HomeView d={d} tab={tab} msg={msg} alerts={alerts} act={act} go={k=>{setMsg('');setSp({p:k})}} onLogout={async()=>{await api('/api/member/logout',{}).catch(()=>{});nav('/')}}/>}
+ return <HomeView d={d} tab={tab} msg={msg} alerts={alerts} giving={giving} stmtYear={stmtYear} onYearChange={y=>setStmtYear(y)} openReceipt={openReceipt} setOpenReceipt={setOpenReceipt} act={act} go={k=>{setMsg('');setOpenReceipt(null);setSp({p:k})}} onLogout={async()=>{await api('/api/member/logout',{}).catch(()=>{});nav('/')}}/>}

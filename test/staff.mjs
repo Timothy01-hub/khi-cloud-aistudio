@@ -11,6 +11,7 @@ globalThis.fetch=async(url,o={})=>{const u=String(url),body=o.body?JSON.parse(o.
  if(u.includes('/rpc/owing_pledges'))return J([{id:5,member_id:7,member:'Grace Phiri',phone:'0971234567',program:'Building Project',balance:300}]);
  if(u.includes('/rpc/record_pledge_payment')){posts.push(['pp',body]);return J(Math.min(body.p_amount,300))}
  if(u.includes('/rpc/void_offering')){posts.push(['void',body]);return J('Entry voided.')}
+ if(u.includes('/rpc/feature_enabled')&&body?.p_key==='feature.login_otp')return J(false);
  if(u.includes('/rpc/'))return J(null);
  if(u.includes('/rest/v1/staff?id=eq.3'))return J([{id:3,role:'secretary',slot:'main',username:'sec1',full_name:'Mary Banda',branch_id:1,branches:{name:'KHI CITY CENTRE'}}]);
  if(u.includes('/rest/v1/staff?id=eq.4'))return J([{id:4,role:'secretary',slot:'assistant',username:'asst',full_name:'Joe Zulu',branch_id:1,branches:{name:'KHI CITY CENTRE'}}]);

@@ -12,13 +12,24 @@ export function NotFound(){
 }
 
 export function DevGate(){
- const nav=useNavigate(),[mode,setMode]=useState('loading'),[e,setE]=useState('');
+ const nav=useNavigate(),[mode,setMode]=useState('loading'),[e,setE]=useState(''),[otp,setOtp]=useState(null),[code,setCode]=useState('');
  useEffect(()=>{document.body.classList.add('login');return()=>document.body.classList.remove('login')},[]);
  useEffect(()=>{api('/api/dev/gate').then(r=>{if(r.ok)nav('/home',{replace:true});else setMode('login')}).catch(()=>setMode('404'))},[nav]);
  if(mode==='loading')return <p className="muted" style={{padding:'2rem'}}>Loading…</p>;
  if(mode==='404')return <NotFound/>;
  const submit=async ev=>{ev.preventDefault();const f=new FormData(ev.target);setE('');
-  try{await api('/api/dev/login',{username:f.get('username'),password:f.get('password')});nav('/home')}catch(x){setE(x.message)}};
+  try{const r=await api('/api/dev/login',{username:f.get('username'),password:f.get('password')});
+   if(r?.otp_required){setOtp({challenge:r.challenge,sent_to:r.sent_to,demo_code:r.demo_code});setCode('');return}
+   nav('/home')}catch(x){setE(x.message)}};
+ const verify=async ev=>{ev.preventDefault();setE('');
+  try{await api('/api/dev/otp',{challenge:otp.challenge,code});nav('/home')}catch(x){setE(x.message)}};
+ if(otp)return <form onSubmit={verify} className="card login-box"><BrandLogo center sub="Developer"/><h2>Developer Sign in — Verification</h2>
+  <p className="muted">Enter the 6-digit one-time code sent to {otp.sent_to||'your email'}.</p>
+  {otp.demo_code&&<p className="ok">Demo verification code: <b>{otp.demo_code}</b></p>}
+  {e&&<p className="err">{e}</p>}
+  <input name="code" placeholder="6-digit verification code" inputMode="numeric" maxLength={6} value={code} onChange={ev=>setCode(ev.target.value)} required autoFocus/>
+  <button>Verify code</button>
+  <button type="button" className="ghost" onClick={()=>{setOtp(null);setCode('');setE('')}}>Back</button></form>;
  return <form onSubmit={submit} className="card login-box"><BrandLogo center sub="Developer"/><h2>Developer Sign in</h2>{e&&<p className="err">{e}</p>}
   <input name="username" placeholder="Username" required autoFocus/><input name="password" type="password" placeholder="Password" required/><button>Sign in</button></form>;
 }
@@ -80,9 +91,10 @@ function UsersTab(){
    <button>Create staff</button></form>
 
   <div className="card"><h3>Staff accounts</h3><Scroll><table><thead><tr><th>Name</th><th>User</th><th>Role</th><th>Unit</th><th>Status</th><th/></tr></thead><tbody>
-   {d.staff.map(s=><tr key={s.id}><td>{s.full_name}</td><td>@{s.username}</td><td>{s.role}{s.slot?` (${s.slot})`:''}</td><td>{s.unit}</td><td>{s.active?'Active':'Disabled'}</td>
+   {d.staff.map(s=><tr key={s.id}><td>{s.full_name}</td><td>@{s.username}</td><td>{s.role}{s.slot?` (${s.slot})`:''}</td><td>{s.unit}</td><td>{s.active?'Active':'Disabled'}{s.locked&&<> · <span className="badge">LOCKED</span></>}</td>
     <td style={{display:'flex',gap:'.35rem',flexWrap:'wrap'}}>
      {s.active&&<button style={small} onClick={()=>imp('staff',s.id)}>Impersonate</button>}
+     {s.locked&&<button style={small} onClick={()=>act('/api/dev/users',{target:'unlock',ident:'s:'+s.username.toLowerCase()})}>Unlock</button>}
      <button className="ghost" style={small} onClick={()=>act('/api/dev/users',{target:'staff',a:'update',id:s.id,role:s.role,branch_id:s.branch_id,slot:s.slot,full_name:s.full_name,username:s.username,privileges:s.privileges,active:!s.active})}>{s.active?'Disable':'Enable'}</button>
      <button className="ghost" style={small} onClick={()=>{const pw=window.prompt('New password (8+ chars)?');if(pw)act('/api/dev/users',{target:'staff',a:'password',id:s.id,password:pw})}}>Password</button>
      <button className="danger" style={small} onClick={()=>window.confirm('Delete staff account?')&&act('/api/dev/users',{target:'staff',a:'delete',id:s.id})}>Delete</button>
@@ -99,9 +111,10 @@ function UsersTab(){
    </div><button>Create member</button></form>
 
   <div className="card"><h3>Members</h3><Scroll><table><thead><tr><th>Name</th><th>Phone</th><th>Unit</th><th/></tr></thead><tbody>
-   {d.members.map(m=><tr key={m.id}><td>{m.full_name}</td><td>{m.phone}</td><td>{m.unit}</td>
+   {d.members.map(m=><tr key={m.id}><td>{m.full_name}{m.locked&&<> <span className="badge">LOCKED</span></>}</td><td>{m.phone}</td><td>{m.unit}</td>
     <td style={{display:'flex',gap:'.35rem',flexWrap:'wrap'}}>
      <button style={small} onClick={()=>imp('member',m.id)}>Impersonate</button>
+     {m.locked&&<button style={small} onClick={()=>act('/api/dev/users',{target:'unlock',ident:m.phone})}>Unlock</button>}
      <button className="ghost" style={small} onClick={()=>{const n=window.prompt('Full name:',m.full_name);if(n)act('/api/dev/users',{target:'member',a:'update',id:m.id,full_name:n,phone:m.phone,branch_id:m.branch_id,must_change:m.must_change})}}>Rename</button>
      <button className="ghost" style={small} onClick={()=>act('/api/dev/users',{target:'member',a:'reset',id:m.id})}>Reset PW</button>
      <button className="danger" style={small} onClick={()=>window.confirm('Delete member?')&&act('/api/dev/users',{target:'member',a:'delete',id:m.id})}>Delete</button>
@@ -126,8 +139,11 @@ function UsersTab(){
 
   <div className="card"><h3>Developer accounts</h3>
    <Scroll><table><thead><tr><th>Name</th><th>Username</th><th>Active</th><th/></tr></thead><tbody>
-    {d.devAccounts.map(a=><tr key={a.id}><td>{a.full_name}</td><td>@{a.username}</td><td>{a.active?'Yes':'No'}</td>
-     <td><button className="ghost" style={small} onClick={()=>act('/api/dev/users',{target:'dev',a:'toggle',id:a.id})}>{a.active?'Disable':'Enable'}</button></td></tr>)}</tbody></table></Scroll>
+    {d.devAccounts.map(a=><tr key={a.id}><td>{a.full_name}</td><td>@{a.username}</td><td>{a.active?'Yes':'No'}{a.locked&&<> · <span className="badge">LOCKED</span></>}</td>
+     <td style={{display:'flex',gap:'.35rem',flexWrap:'wrap'}}>
+      {a.locked&&<button style={small} onClick={()=>act('/api/dev/users',{target:'unlock',ident:'d:'+a.username.toLowerCase()})}>Unlock</button>}
+      <button className="ghost" style={small} onClick={()=>act('/api/dev/users',{target:'dev',a:'toggle',id:a.id})}>{a.active?'Disable':'Enable'}</button>
+     </td></tr>)}</tbody></table></Scroll>
    <form onSubmit={async e=>{e.preventDefault();const r=await act('/api/dev/password',{password:devPw});if(r)setDevPw('')}} style={{marginTop:'.8rem'}}>
     <input type="password" minLength={10} placeholder="New developer password (10+)" value={devPw} onChange={e=>setDevPw(e.target.value)} required/>
     <button className="ghost">Change my password</button></form></div></>;

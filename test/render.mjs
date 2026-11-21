@@ -17,5 +17,9 @@ let t=hv('events');ok('events tab',t.includes('Revival Night')&&t.includes('TODA
 t=hv('pledges');ok('pledges tab',t.includes('Make a pledge')&&t.includes('Balance K 300.00')&&t.includes('Plot 5'));
 t=hv('alerts');ok('alerts tab',t.includes('Payment received'));
 t=hv('account',{d:{...d,me:{...d.me,mustChange:true}}});ok('account tab + forced change',t.includes('Change password')&&t.includes('set a new password'));
+const givingData={receipts:[{id:1,receipt_no:'KHI-KCC-2026-0001',date:'2026-01-05',branch:'KHI CITY CENTRE',brand:'KHI CITY CENTRE',type:'physical',category:'Tithe',amount:250,sender:'Grace Phiri',voided:false}],
+ statement:{year:2026,years:[2026],rows:[{id:1,receipt_no:'KHI-KCC-2026-0001',date:'2026-01-05',branch:'KHI CITY CENTRE',type:'physical',category:'Tithe',amount:250}],byType:{Tithe:250},byMethod:{physical:250,digital:0},total:250,member:{full_name:'Grace Phiri',phone:'0971234567',branch:'KHI CITY CENTRE'},profile:{email:'a@b.c'}}};
+t=hv('giving',{giving:givingData,stmtYear:2026,openReceipt:givingData.receipts[0]});
+ok('giving tab + receipt + statement',t.includes('KHI-KCC-2026-0001')&&t.includes('ANNUAL GIVING STATEMENT (2026)')&&t.includes('Download yearly statement'));
 ok('message banner',hv('events',{msg:'Error: nope'}).includes('class="err"'));
 console.log(fails?`\n${fails} FAILED`:'\nAll screens render');process.exit(fails?1:0);
