@@ -266,7 +266,7 @@ ok('v3 UI secretary: active announcements rendered at top of secretary dashboard
  * PART 3: WORKER API (src/index.js)
  * ======================================================================== */
 const env={SUPABASE_URL:'http://sb',SUPABASE_SERVICE_KEY:'sk',SUPABASE_ANON_KEY:'ak',SUPABASE_JWT_SECRET:'jwt-secret-test',SESSION_SECRET:'secret',GEO_ENFORCE:'false'};
-let featOverrides={'feature.announcements':true,'feature.budgets':true,'feature.exports':true};
+let featOverrides={'feature.announcements':true,'feature.budgets':true,'feature.exports':true,'feature.sms':false};
 const captured=[];
 globalThis.fetch=async(url,o={})=>{
  const u=String(url),body=o.body?JSON.parse(o.body):null;
@@ -276,7 +276,7 @@ globalThis.fetch=async(url,o={})=>{
  if(u.includes('/rpc/dev_login'))return new Response(JSON.stringify(1));
  if(u.includes('/rpc/verify_login_otp'))return new Response(JSON.stringify([{ok:true,role:body.p_token==='dev-tok'?'developer':body.p_token==='sec-tok'?'secretary':'admin',user_id:body.p_token==='sec-tok'?2:1}]));
  if(u.includes('/rpc/create_login_otp'))return new Response(JSON.stringify(body.p_role==='secretary'?'sec-tok':'tok-123'));
- if(u.includes('/rpc/my_features'))return new Response(JSON.stringify({'feature.receipts':true,'feature.expenses':true,'feature.two_step_approval':true,'feature.login_otp':false,...featOverrides}));
+ if(u.includes('/rpc/my_features'))return new Response(JSON.stringify({'feature.receipts':true,'feature.expenses':true,'feature.two_step_approval':true,'feature.login_otp':false,'feature.sms':false,...featOverrides}));
  if(u.includes('/rpc/feature_enabled')){const k=body?.p_key;return new Response(JSON.stringify(k in featOverrides?featOverrides[k]:true))}
  if(u.includes('/rpc/branch_totals')||u.includes('/rpc/owing_pledges'))return new Response(JSON.stringify([]));
  if(u.includes('/rpc/'))return new Response(JSON.stringify(null));
@@ -305,7 +305,7 @@ let wd=await wr.json();
 ok('v3 Worker member home: returns active announcements',Array.isArray(wd.announcements)&&wd.announcements.some(a=>a.title==='Global Note'));
 
 // Secretary login + home announcements + report export flag
-featOverrides={'feature.announcements':true,'feature.budgets':true,'feature.exports':true,'feature.login_otp':false};
+featOverrides={'feature.announcements':true,'feature.budgets':true,'feature.exports':true,'feature.login_otp':false,'feature.sms':false};
 wr=await wCall('/api/staff/login',{username:'sec1',password:'pw',app:'secretary'});
 const secCk=wr.headers.get('Set-Cookie').split(';')[0];
 wr=await wCall('/api/staff/home',undefined,{headers:{Cookie:secCk}});
@@ -336,7 +336,7 @@ ok('v3 Worker admin report: returns budget vs actual with 92% >90% warning',
  wd.budgets?.rows?.[0]?.Pct_Used===92&&wd.budgets?.rows?.[0]?.warning===true&&wd.features?.['feature.exports']===true);
 
 // Developer bypass when all v3 flags are OFF
-featOverrides={'feature.announcements':false,'feature.budgets':false,'feature.exports':false,'feature.login_otp':false};
+featOverrides={'feature.announcements':false,'feature.budgets':false,'feature.exports':false,'feature.login_otp':false,'feature.sms':false};
 wr=await wCall('/api/dev/login',{username:'timothy',password:'pw'});
 const devCk=(wr.headers.getSetCookie?.()[0]||wr.headers.get('Set-Cookie')).split(';')[0];
 wr=await wCall('/api/admin/report?kind=budgets&from=2026-01-01&to=2026-12-31&year=2026',undefined,{headers:{Cookie:devCk}});

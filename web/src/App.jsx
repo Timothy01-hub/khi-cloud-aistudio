@@ -9,9 +9,20 @@ const useLoginBody=()=>useEffect(()=>{document.body.classList.add('login');retur
 const Install=({text})=><a href="#" id="install" hidden onClick={e=>{e.preventDefault();window.khInstall&&window.khInstall()}}>{text}</a>;
 const small={padding:'.2rem .6rem',width:'auto'};
 
-export function Login(){useLoginBody();const nav=useNavigate(),[sp]=useSearchParams(),[e,setE]=useState('');
+export function Login(){useLoginBody();const nav=useNavigate(),[sp]=useSearchParams(),[e,setE]=useState(''),[otp,setOtp]=useState(null),[code,setCode]=useState('');
  const submit=async ev=>{ev.preventDefault();const f=new FormData(ev.target);setE('');
-  try{await api('/api/member/login',{phone:f.get('phone'),password:f.get('password')});nav('/home')}catch(x){setE(x.message)}};
+  try{const r=await api('/api/member/login',{phone:f.get('phone'),password:f.get('password')});
+   if(r?.otp_required){setOtp({challenge:r.challenge,sent_to:r.sent_to,demo_code:r.demo_code});setCode('');return}
+   nav('/home')}catch(x){setE(x.message)}};
+ const verify=async ev=>{ev.preventDefault();setE('');
+  try{await api('/api/member/otp',{challenge:otp.challenge,code});nav('/home')}catch(x){setE(x.message)}};
+ if(otp)return <form onSubmit={verify} className="card login-box"><BrandLogo center sub="Raising True Christians who Impact Nations with God's Kingdom"/><h2>Member Sign in — Verification</h2>
+  <p className="muted">Enter the 6-digit one-time code sent to {otp.sent_to||'your phone'}.</p>
+  {otp.demo_code&&<p className="ok">Demo verification code: <b>{otp.demo_code}</b></p>}
+  {e&&<p className="err">{e}</p>}
+  <input name="code" placeholder="6-digit verification code" inputMode="numeric" maxLength={6} value={code} onChange={ev=>setCode(ev.target.value)} required autoFocus/>
+  <button>Verify code</button>
+  <button type="button" className="ghost" onClick={()=>{setOtp(null);setCode('');setE('')}}>Back</button></form>;
  return <form onSubmit={submit} className="card login-box"><BrandLogo center sub="Raising True Christians who Impact Nations with God's Kingdom"/><h2>Member Sign in</h2>
   {sp.get('registered')&&!e&&<p className="ok">Registration successful! Please sign in.</p>}{e&&<p className="err">{e}</p>}
   <input name="phone" placeholder="Phone number" inputMode="tel" required autoFocus/><input name="password" type="password" placeholder="Password" required/><button>Sign in</button>

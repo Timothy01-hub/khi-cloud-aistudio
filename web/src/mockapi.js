@@ -9,6 +9,9 @@ const DEPTS=['Ushering','Intercessory','Media','Protocol','Hospitality','Praise 
 const E=(m,s=400)=>Object.assign(new Error(m),{status:s});
 const maskEmail=e=>{const s=String(e||'').trim();const i=s.indexOf('@');if(i<2)return s?s[0]+'***'+(i>=0?s.slice(i):''):'church email';return s[0]+'***'+s.slice(i-1)};
 const parseEmail=e=>{const s=String(e||'').trim();if(!s)return'';if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s))throw E('Enter a valid email address or leave it blank.');return s};
+const smsPhone=s=>{let d=String(s||'').replace(/\D/g,'');if(!d)return null;if(d.startsWith('00260')&&d.length===14)d=d.slice(2);else if(d.startsWith('2600')&&d.length===13)d='260'+d.slice(4);else if(d.length===10&&d.startsWith('0'))d='260'+d.slice(1);else if(d.length===9&&!d.startsWith('0'))d='260'+d;return /^260\d{9}$/.test(d)?'+'+d:null};
+const maskPhone=p=>{const n=smsPhone(p)||String(p||'').trim();if(n.length<8)return n||'phone';return n.slice(0,6)+'***'+n.slice(-3)};
+const parsePhone=p=>{const s=String(p||'').trim();if(!s)return'';const n=smsPhone(s);if(!n)throw E('Enter a valid Zambian phone number or leave it blank.');return n};
 const genOtp=()=>String(100000+Math.floor(Math.random()*900000));
 const isLocked=ident=>{const r=failLog[ident];if(!r)return false;const now=Date.now();if(r.lockedUntil>now)return true;r.ts=(r.ts||[]).filter(t=>now-t<LOCK_MS);if(r.lockedUntil&&r.lockedUntil<=now&&r.ts.length<5){delete failLog[ident];return false}return r.ts.length>=5};
 const recordFail=ident=>{const now=Date.now(),r=failLog[ident]||{ts:[],lockedUntil:0};r.ts=r.ts.filter(t=>now-t<LOCK_MS);r.ts.push(now);if(r.ts.length>=5)r.lockedUntil=now+LOCK_MS;failLog[ident]=r};
@@ -44,7 +47,7 @@ const CATALOG=[
  {key:'feature.announcements',label:'Announcements for Members & Secretaries',kind:'feature',default_enabled:true,note:null},
  {key:'feature.budgets',label:'Branch yearly budgets & variance tracking',kind:'feature',default_enabled:true,note:null},
  {key:'feature.exports',label:'Excel & PDF report exports',kind:'feature',default_enabled:true,note:null},
- {key:'stub.sms',label:'SMS notifications',kind:'stub',default_enabled:false,note:'Not built yet'},
+ {key:'feature.sms',label:'SMS notifications',kind:'feature',default_enabled:false,note:null},
  {key:'stub.mobile_money',label:'Mobile-money payments',kind:'stub',default_enabled:false,note:'Not built yet'},
  {key:'stub.backups_export',label:'Backups and data export',kind:'stub',default_enabled:false,note:'Not built yet'},
  {key:'stub.multi_language',label:'Multi-language',kind:'stub',default_enabled:false,note:'Not built yet'},
@@ -56,9 +59,10 @@ const CATALOG=[
 const receiptCounters={};
 const db={
  branches:[{id:1,name:'KHI CITY CENTRE',kind:'center',parent_id:null,is_main:true,momo_number:'0971000001',code:'KCC'},{id:2,name:'NIPA FELLOWSHIP',kind:'fellowship',parent_id:1,is_main:false,momo_number:null,code:'NIP'},{id:3,name:'Matero',kind:'branch',parent_id:1,is_main:false,momo_number:null,code:'MAT'}],
- staff:[{id:1,role:'admin',branch_id:1,privileges:['accounts','members','events','programs','attendance','reports','void','audit','assets','expenses','announcements','budgets'],username:'admin',full_name:'City Centre Admin',email:'admin@khi.local',active:true},{id:5,role:'superadmin',branch_id:null,slot:null,privileges:[],username:'super',full_name:'Apostle Felix Mwamba',email:'super@khi.local',active:true},{id:6,role:'admin',branch_id:2,privileges:['events','attendance','reports'],username:'nipaadmin',full_name:'Nipa Admin',email:'nipa@khi.local',active:true},{id:2,role:'secretary',branch_id:1,slot:'main',username:'sec1',full_name:'Mary Banda',email:'',active:true},{id:3,role:'secretary',branch_id:1,slot:'assistant',username:'sec2',full_name:'Joe Zulu',email:'',active:true},{id:4,role:'secretary',branch_id:2,slot:'main',username:'nipa1',full_name:'Ruth Mumba',email:'',active:true}],
- dev_accounts:[{id:1,username:'timothy',full_name:'Timothy',email:'timothy@khi.local',active:true}],
+ staff:[{id:1,role:'admin',branch_id:1,privileges:['accounts','members','events','programs','attendance','reports','void','audit','assets','expenses','announcements','budgets'],username:'admin',full_name:'City Centre Admin',email:'admin@khi.local',phone:'',active:true},{id:5,role:'superadmin',branch_id:null,slot:null,privileges:[],username:'super',full_name:'Apostle Felix Mwamba',email:'super@khi.local',phone:'',active:true},{id:6,role:'admin',branch_id:2,privileges:['events','attendance','reports'],username:'nipaadmin',full_name:'Nipa Admin',email:'nipa@khi.local',phone:'',active:true},{id:2,role:'secretary',branch_id:1,slot:'main',username:'sec1',full_name:'Mary Banda',email:'',phone:'',active:true},{id:3,role:'secretary',branch_id:1,slot:'assistant',username:'sec2',full_name:'Joe Zulu',email:'',phone:'',active:true},{id:4,role:'secretary',branch_id:2,slot:'main',username:'nipa1',full_name:'Ruth Mumba',email:'',phone:'',active:true}],
+ dev_accounts:[{id:1,username:'timothy',full_name:'Timothy',email:'timothy@khi.local',phone:'',active:true}],
  dev_audit:[],
+ sms_log:[],
  feature_flags:[],
  extra_settings:{},
  members:[{id:1,branch_id:1,full_name:'Grace Phiri',phone:'0971234567',must_change:false},{id:2,branch_id:1,full_name:'Peter Mwansa',phone:'0961234567',must_change:false},{id:3,branch_id:2,full_name:'Mary Tembo',phone:'0951234567',must_change:false}],
@@ -126,6 +130,15 @@ const paidOf=p=>db.payments.filter(x=>x.pledge_id===p.id).reduce((a,x)=>a+x.amou
 const log=(actor,action,detail='')=>db.audit.unshift({id:nid(),actor,action,detail,ip:'demo',created_at:new Date().toISOString()});
 const devLog=(devId,action,detail='')=>db.dev_audit.unshift({id:nid(),dev_id:devId,action,detail,ip:'demo',created_at:new Date().toISOString()});
 const notify=(mid,message)=>db.notifications.unshift({id:nid(),member_id:mid,message,is_read:false,created_at:new Date().toISOString()});
+function mockSendSms({to,message,kind='general',branch_id=null,by='system'}){
+ const raw=Array.isArray(to)?to:[to];
+ const list=[...new Set(raw.map(smsPhone).filter(Boolean))];
+ if(!list.length)return{ok:false,to:null,status:'Invalid phone number',cost:null,error:'Invalid phone number'};
+ const msg=String(message||'').trim().slice(0,640);
+ const rows=list.map(ph=>{
+  const item={id:nid(),branch_id,kind,to_phone:ph,message:msg,status:'Success',status_code:101,cost:'ZMW 0.1500',message_id:'ATXid_demo_'+nid(),ok:true,error:null,created_by:by,created_at:new Date().toISOString()};
+  db.sms_log.unshift(item);return item});
+ return{ok:true,to:rows[0].to_phone,status:'Success',cost:'ZMW 0.1500',recipients:rows}}
 const money=n=>'K '+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const pwOk=(k,p)=>(db.pw[k]||PW)===p;
 const staffMe=role=>{const s=db.staff.find(x=>x.id===S.s&&x.active);if(!s||(role&&s.role!==role))throw E('Please sign in.',401);return s};
@@ -232,7 +245,25 @@ function route(p,q,b,post){
  if(p==='/api/member/login'){const ph=phoneN(b.phone);if(isLocked(ph))throw E('Too many failed attempts. Please wait 15 minutes and try again.',429);const m=db.members.find(x=>x.phone===ph);
   if(!m||!pwOk('m'+m.id,b.password)){recordFail(ph);throw E('Wrong phone number or password.',401)}
   if(!featureEnabled('app.member',m.branch_id))throw E('This app is currently disabled.',403);
+  if(featureEnabled('feature.sms',m.branch_id)){
+   const code=genOtp(),challenge=Math.random().toString(36).slice(2)+Date.now().toString(36);
+   otps.set(challenge,{role:'member',userId:m.id,code,attempts:0,expiresAt:Date.now()+OTP_MS});
+   const sr=mockSendSms({to:m.phone,message:`Your Kingdom Heralds verification code is: ${code}. It expires in 10 minutes.`,kind:'member_otp',branch_id:m.branch_id,by:'member:'+ph});
+   const sentTo=sr.ok?maskPhone(sr.to||m.phone):maskEmail(db.profile.email);
+   return{ok:true,otp_required:true,challenge,sent_to:sentTo,demo_code:code}}
   clearFail(ph);S.m=m.id;return{ok:true}}
+ if(p==='/api/member/otp'){
+  const ch=String(b.challenge||''),entry=otps.get(ch);
+  if(!entry||entry.expiresAt<Date.now()||entry.role!=='member')throw E('Verification code expired or invalid.',401);
+  if(entry.attempts>=5){otps.delete(ch);throw E('Too many invalid codes. Please sign in again.',401)}
+  const m=db.members.find(x=>x.id===entry.userId);
+  if(!m)throw E('Wrong phone number or password.',401);
+  if(String(b.code||'').trim()!==entry.code){entry.attempts++;recordFail(m.phone);
+   if(entry.attempts>=5){otps.delete(ch);throw E('Too many invalid codes. Please sign in again.',401)}
+   throw E('Wrong verification code.',401)}
+  if(isLocked(m.phone))throw E('Too many failed attempts. Please wait 15 minutes and try again.',429);
+  if(!featureEnabled('app.member',m.branch_id))throw E('This app is currently disabled.',403);
+  otps.delete(ch);clearFail(m.phone);S.m=m.id;return{ok:true}}
  if(p==='/api/member/logout'){S.m=null;return{ok:true}}
  if(p==='/api/member/register'){
   const br=+b.branch;
@@ -284,7 +315,12 @@ function route(p,q,b,post){
   if(featureEnabled('feature.login_otp',s.branch_id||null)){
    const code=genOtp(),challenge=Math.random().toString(36).slice(2)+Date.now().toString(36);
    otps.set(challenge,{role,userId:s.id,code,attempts:0,expiresAt:Date.now()+OTP_MS});
-   return{ok:true,otp_required:true,challenge,sent_to:maskEmail(s.email||db.profile.email),demo_code:code}}
+   let sentTo=null;
+   if(featureEnabled('feature.sms',s.branch_id||null)&&s.phone){
+    const sr=mockSendSms({to:s.phone,message:`Your Kingdom Heralds verification code is: ${code}. It expires in 10 minutes.`,kind:'staff_otp',branch_id:s.branch_id||null,by:role+':'+s.username});
+    if(sr.ok)sentTo=maskPhone(sr.to||s.phone)}
+   if(!sentTo)sentTo=maskEmail(s.email||db.profile.email);
+   return{ok:true,otp_required:true,challenge,sent_to:sentTo,demo_code:code}}
   clearFail(k);S.s=s.id;log(role+':'+s.username,'login');return{ok:true}}
  if(p==='/api/staff/otp'){
   const ch=String(b.challenge||''),entry=otps.get(ch);
@@ -311,12 +347,18 @@ function route(p,q,b,post){
    const row=db.offerings.find(x=>x.id===+q.id&&x.branch_id===B);if(!row)throw E('Receipt not found.',404);
    return{receipt:{...row,amount:+row.amount,branch:bn(B),brand:brandText(B),date:String(row.created_at||'').slice(0,10)},church:db.profile}}
   if(p==='/api/staff/cash'){const a=Math.round(parseFloat(b.amount)*100)/100;if(!(a>0&&a<1e7))throw E('Enter a valid amount.');const cat=['Offering','Tithe','Seed','Thanksgiving','Building Fund'].includes(b.category)?b.category:'Offering';
-   const senderStr=String(b.sender||'').trim()||null;let midLink=b.member_id?+b.member_id:null;
-   if(!midLink&&senderStr){const ph=phoneN(senderStr);if(ph.length>=10){const mm=db.members.find(x=>x.branch_id===B&&x.phone===ph);if(mm)midLink=mm.id}}
+   const senderStr=String(b.sender||'').trim()||null;let midLink=b.member_id?+b.member_id:null,memPhone=null;
+   if(!midLink&&senderStr){const ph=phoneN(senderStr);if(ph.length>=10){const mm=db.members.find(x=>x.branch_id===B&&x.phone===ph);if(mm){midLink=mm.id;memPhone=mm.phone}}}
+   else if(midLink){const mm=db.members.find(x=>x.id===midLink);if(mm)memPhone=mm.phone}
+   if(!memPhone&&senderStr)memPhone=smsPhone(senderStr);
    const row=o(nid(),B,'physical',cat,a,senderStr,String(b.note||'').trim()||null,by,0,midLink?{member_id:midLink}:{});
-   db.offerings.unshift(row);log(tag,'record_physical',money(a)+' '+cat+' ('+row.receipt_no+')');return{ok:true,id:row.id,receipt_no:row.receipt_no,message:'Recorded '+money(a)+'.'}}
-  if(p==='/api/staff/pledge-payment'){const pl=db.pledges.find(x=>x.id===+b.pledge),a=Math.round(parseFloat(b.amount)*100)/100;if(!pl||db.members.find(m=>m.id===pl.member_id).branch_id!==B)throw E('Choose a pledge from your fellowship.');if(!(a>0))throw E('Enter a valid amount.');
-   const res=pay(pl,a,by,'physical');if(!res)throw E('Nothing to record: that pledge is already fully paid.');return{ok:true,receipt_no:res.receipt_no,message:'Pledge payment of '+money(res.amount)+' recorded.'}}
+   db.offerings.unshift(row);log(tag,'record_physical',money(a)+' '+cat+' ('+row.receipt_no+')');
+   if(memPhone&&featureEnabled('feature.sms',B))mockSendSms({to:memPhone,message:`Receipt ${row.receipt_no}: Thank you for your ${cat} of ${money(a)}. God bless you!`,kind:'receipt',branch_id:B,by:tag});
+   return{ok:true,id:row.id,receipt_no:row.receipt_no,message:'Recorded '+money(a)+'.'}}
+  if(p==='/api/staff/pledge-payment'){const pl=db.pledges.find(x=>x.id===+b.pledge),a=Math.round(parseFloat(b.amount)*100)/100,mm=pl?db.members.find(m=>m.id===pl.member_id):null,pr=pl?db.programs.find(g=>g.id===pl.program_id):null;if(!pl||mm?.branch_id!==B)throw E('Choose a pledge from your fellowship.');if(!(a>0))throw E('Enter a valid amount.');
+   const res=pay(pl,a,by,'physical');if(!res)throw E('Nothing to record: that pledge is already fully paid.');
+   if(mm?.phone&&featureEnabled('feature.sms',B))mockSendSms({to:mm.phone,message:`Receipt ${res.receipt_no}: Pledge payment of ${money(res.amount)}${pr?.title?' for '+pr.title:''} received. God bless you!`,kind:'receipt',branch_id:B,by:tag});
+   return{ok:true,receipt_no:res.receipt_no,message:'Pledge payment of '+money(res.amount)+' recorded.'}}
   if(p==='/api/staff/void'){if(me.slot!=='main')throw E('Only the Main Secretary can void entries.',403);
    const reason=String(b.reason||'').trim();if(!reason)throw E('Please enter a reason.');
    const row=db.offerings.find(x=>x.id===+b.id&&x.branch_id===B&&!x.voided);if(!row)throw E('Cannot void this entry.');
@@ -382,14 +424,14 @@ function route(p,q,b,post){
    const f=db.branches.find(x=>x.id===+b.id);if(!f)throw E('Not found',404);if(par&&kids(f.id).includes(par))throw E('A unit cannot sit under itself or under one of its own fellowships.');
    f.name=String(b.name||'').trim()||f.name;if(b.kind)f.kind=kind;f.parent_id=par;f.momo_number=b.momo||null;audit('admin_edit_unit',labelOf(f));return{ok:true,message:'Saved.'}}
   /* admins and their privileges: only the Super Admin; blocked privileges can never be granted */
-  if(p==='/api/admin/admins'){sup();const lk=lkSet();return{admins:db.staff.filter(s=>s.role==='admin').map(s=>({id:s.id,username:s.username,full_name:s.full_name,email:s.email||'',branch_id:s.branch_id,unit:bn(s.branch_id),privileges:s.privileges,active:s.active,locked:lk.has('s:'+s.username.toLowerCase())})),units:db.branches.map(U),grantable:GRANT,blocked:BLOCK}}
+  if(p==='/api/admin/admins'){sup();const lk=lkSet();return{admins:db.staff.filter(s=>s.role==='admin').map(s=>({id:s.id,username:s.username,full_name:s.full_name,email:s.email||'',phone:s.phone||'',branch_id:s.branch_id,unit:bn(s.branch_id),privileges:s.privileges,active:s.active,locked:lk.has('s:'+s.username.toLowerCase())})),units:db.branches.map(U),grantable:GRANT,blocked:BLOCK}}
   if(p==='/api/admin/admin'){sup();const chk=a=>{const bad=(a||[]).find(x=>!GRANT.some(g=>g[0]===x));if(bad)throw E(`"${bad}" is reserved for the Super Admin and cannot be given to an admin.`);return a||[]};
    if(b.a==='create'){if(String(b.password||'').length<8)throw E('Password must be 8+ characters.');if(!db.branches.some(x=>x.id===+b.branch))throw E('Choose the church this admin will run.');if(db.staff.some(s=>s.username===String(b.username).trim()))throw E('That username is already taken.');
-    const em=parseEmail(b.email);
-    const s={id:nid(),role:'admin',branch_id:+b.branch,privileges:chk(b.privileges),username:String(b.username).trim(),full_name:String(b.name).trim(),email:em,active:true};db.staff.push(s);db.pw['s'+s.id]=b.password;audit('admin_create_admin',s.username);return{ok:true,message:'Admin created.'}}
+    const em=parseEmail(b.email),ph=parsePhone(b.phone);
+    const s={id:nid(),role:'admin',branch_id:+b.branch,privileges:chk(b.privileges),username:String(b.username).trim(),full_name:String(b.name).trim(),email:em,phone:ph,active:true};db.staff.push(s);db.pw['s'+s.id]=b.password;audit('admin_create_admin',s.username);return{ok:true,message:'Admin created.'}}
    const s=db.staff.find(x=>x.id===+b.id&&x.role==='admin');if(!s)throw E('Not found',404);
    if(b.a==='privileges'){s.privileges=chk(b.privileges);audit('admin_set_privileges',s.username);return{ok:true,message:'Privileges saved.'}}
-   if(b.a==='email'){s.email=parseEmail(b.email);audit('admin_set_email',s.username);return{ok:true,message:s.email?'Email saved.':'Email cleared.'}}
+   if(b.a==='email'){s.email=parseEmail(b.email);if(b.phone!==undefined)s.phone=parsePhone(b.phone);audit('admin_set_email',s.username);return{ok:true,message:!s.email&&b.phone!==undefined&&s.phone?'Phone saved.':s.email?'Email saved.':'Email cleared.'}}
    if(b.a==='password'){if(String(b.password||'').length<8)throw E('Password must be 8+ characters.');db.pw['s'+s.id]=b.password;audit('admin_reset',s.username);return{ok:true,message:'Password changed.'}}
    if(b.a==='toggle'){s.active=!s.active;if(isDev)audit('admin_toggle_admin',s.username);return{ok:true,message:s.active?'Admin enabled.':'Admin disabled.'}}
    if(b.a==='delete'){db.staff=db.staff.filter(x=>x!==s);audit('admin_delete_admin',s.username);return{ok:true,message:'Admin deleted.'}}}
@@ -406,15 +448,15 @@ function route(p,q,b,post){
    const pr=b.profile||{};if(!String(pr.vision||'').trim()||!String(pr.mission||'').trim())throw E('Vision and mission cannot be empty.');
    db.profile={vision:pr.vision.trim(),mission:pr.mission.trim(),founded:+pr.founded||db.profile.founded,email:String(pr.email||'').trim()};audit('profile_edit');return{ok:true,message:'Profile saved.'}}
   /* secretary accounts (privilege: accounts) */
-  if(p==='/api/admin/accounts'){need('accounts');needFlag('accounts');const lk=isSuper?lkSet():new Set();const mapS=s=>s?({...s,email:s.email||'',locked:lk.has('s:'+s.username.toLowerCase())}):null;
+  if(p==='/api/admin/accounts'){need('accounts');needFlag('accounts');const lk=isSuper?lkSet():new Set();const mapS=s=>s?({...s,email:s.email||'',phone:s.phone||'',locked:lk.has('s:'+s.username.toLowerCase())}):null;
    return{fellowships:units().sort((x,y)=>y.is_main-x.is_main).map(x=>({id:x.id,name:x.name,label:x.label,is_main:x.is_main,slots:{main:mapS(db.staff.find(s=>s.role==='secretary'&&s.branch_id===x.id&&s.slot==='main')),assistant:mapS(db.staff.find(s=>s.role==='secretary'&&s.branch_id===x.id&&s.slot==='assistant'))}})),me:{username:by}}}
   if(p==='/api/admin/account'){need('accounts');if(b.a!=='own')needFlag('accounts');
    if(b.a==='create'){if(!inSc(scope,+b.branch))throw E('That church is outside your area.',403);if(String(b.password||'').length<8)throw E('Password must be 8+ characters.');if(db.staff.some(s=>s.username===String(b.username).trim()))throw E('That username is already taken.');if(db.staff.some(s=>s.role==='secretary'&&s.branch_id===+b.branch&&s.slot===b.slot))throw E('That slot already has an account.');
-    const em=parseEmail(b.email);
-    const s={id:nid(),role:'secretary',branch_id:+b.branch,slot:b.slot,username:String(b.username).trim(),full_name:String(b.name).trim(),email:em,active:true,privileges:[]};db.staff.push(s);db.pw['s'+s.id]=b.password;audit('admin_create',s.username);return{ok:true,message:'Account created.'}}
+    const em=parseEmail(b.email),ph=parsePhone(b.phone);
+    const s={id:nid(),role:'secretary',branch_id:+b.branch,slot:b.slot,username:String(b.username).trim(),full_name:String(b.name).trim(),email:em,phone:ph,active:true,privileges:[]};db.staff.push(s);db.pw['s'+s.id]=b.password;audit('admin_create',s.username);return{ok:true,message:'Account created.'}}
    if(b.a==='own'){if(isDev){if(String(b.password||'').length<10)throw E('Developer password must be 10+ characters.');db.pw['d'+devUser.id]=b.password;audit('change_password')}else{if(String(b.password||'').length<8)throw E('Password must be 8+ characters.');db.pw['s'+me.id]=b.password}return{ok:true,message:'Your password changed.'}}
    const s=db.staff.find(x=>x.id===+b.id&&x.role==='secretary'&&inSc(scope,x.branch_id));if(!s)throw E('Not found',404);
-   if(b.a==='email'){s.email=parseEmail(b.email);audit('admin_set_email',s.username);return{ok:true,message:s.email?'Email saved.':'Email cleared.'}}
+   if(b.a==='email'){s.email=parseEmail(b.email);if(b.phone!==undefined)s.phone=parsePhone(b.phone);audit('admin_set_email',s.username);return{ok:true,message:!s.email&&b.phone!==undefined&&s.phone?'Phone saved.':s.email?'Email saved.':'Email cleared.'}}
    if(b.a==='password'){if(String(b.password||'').length<8)throw E('Password must be 8+ characters.');db.pw['s'+s.id]=b.password;audit('admin_reset',s.username);return{ok:true,message:'Password changed.'}}
    if(b.a==='toggle'){s.active=!s.active;audit('admin_toggle',s.username);return{ok:true,message:s.active?'Account enabled.':'Account disabled.'}}
    if(b.a==='delete'){db.staff=db.staff.filter(x=>x!==s);audit('admin_delete',s.username);return{ok:true,message:'Account deleted.'}}}
@@ -471,7 +513,7 @@ function route(p,q,b,post){
   if(p==='/api/admin/report'){need('reports');needFlag('reports');if(q.kind==='budgets'&&!v2On('budgets'))throw E('Branch budgets are currently disabled.',403);let financial=null,budgets=null;if(v2On('expenses')){const fin=report({...q,kind:'financial'},scope);financial={branches:fin.slice(0,-1),churchWide:fin.at(-1)||null}}if(v2On('budgets')){const yr=/^\d{4}$/.test(String(q.year||''))?+q.year:+((q.to||q.from||D0()).slice(0,4));budgets={year:yr,rows:budgetVsActual(yr,scope,+q.branch||0)}}return{rows:report(q,scope),financial,budgets,fellowships:units(),features:{'feature.exports':v2On('exports'),'feature.budgets':v2On('budgets')}}}
   if(p==='/api/admin/announcements'){if(!can('announcements')||!v2On('announcements'))throw E('You do not have permission for that.',403);
    const owns=a=>a&&(isSuper||(a.branch_id!==null&&scope.includes(a.branch_id)));
-   if(!post){const D=D0();return{canAll:isSuper,units:units(),announcements:db.announcements.filter(owns).sort((a,c)=>c.id-a.id).map(a=>({...a,branch_label:a.branch_id?bn(a.branch_id):'All branches',active:!a.expires_at||a.expires_at>=D}))}}
+   if(!post){const D=D0();return{canAll:isSuper,smsEnabled:featureEnabled('feature.sms',unitScope),units:units(),announcements:db.announcements.filter(owns).sort((a,c)=>c.id-a.id).map(a=>({...a,branch_label:a.branch_id?bn(a.branch_id):'All branches',active:!a.expires_at||a.expires_at>=D}))}}
    if(b.a==='add'||b.a==='edit'){
     const title=String(b.title||'').trim().slice(0,140),bodyTxt=String(b.body||'').trim().slice(0,2000),exp=String(b.expires_at||'').trim()||null;
     if(!title||!bodyTxt)throw E('Title and body are required.');
@@ -479,10 +521,15 @@ function route(p,q,b,post){
     const br=b.branch===''||b.branch==null?null:+b.branch;
     if(br===null&&!isSuper)throw E('Choose a branch in your area.',403);
     if(br!==null&&(!db.branches.some(x=>x.id===br)||!inSc(scope,br)))throw E('That church is outside your area.',403);
+    const sendScopedSms=()=>{
+     if(!b.send_sms||!featureEnabled('feature.sms',br??unitScope))return;
+     const scIds=br===null?null:kids(br);
+     const phones=db.members.filter(m=>inSc(scIds,m.branch_id)).map(m=>m.phone).filter(Boolean);
+     if(phones.length)mockSendSms({to:phones,message:`${title}: ${bodyTxt}`,kind:'announcement',branch_id:br,by:tag})};
     if(b.a==='add'){const row={id:nid(),branch_id:br,title,body:bodyTxt,expires_at:exp,created_by:tag,created_at:new Date().toISOString(),updated_at:new Date().toISOString()};
-     db.announcements.unshift(row);audit('announcement_add',`${br?bn(br):'All branches'}: ${title}`);return{ok:true,id:row.id,message:'Announcement posted.'}}
+     db.announcements.unshift(row);audit('announcement_add',`${br?bn(br):'All branches'}: ${title}`);sendScopedSms();return{ok:true,id:row.id,message:'Announcement posted.'}}
     const ex=db.announcements.find(x=>x.id===+b.id);if(!ex)throw E('Announcement not found.',404);if(!owns(ex))throw E('You cannot edit an announcement outside your scope.',403);
-    Object.assign(ex,{branch_id:br,title,body:bodyTxt,expires_at:exp,updated_at:new Date().toISOString()});audit('announcement_edit',`#${ex.id} ${title}`);return{ok:true,message:'Announcement updated.'}}
+    Object.assign(ex,{branch_id:br,title,body:bodyTxt,expires_at:exp,updated_at:new Date().toISOString()});audit('announcement_edit',`#${ex.id} ${title}`);sendScopedSms();return{ok:true,message:'Announcement updated.'}}
    if(b.a==='delete'){const ex=db.announcements.find(x=>x.id===+b.id);if(!ex)throw E('Announcement not found.',404);if(!owns(ex))throw E('You cannot delete an announcement outside your scope.',403);
     db.announcements=db.announcements.filter(x=>x!==ex);audit('announcement_delete',`#${ex.id} ${ex.title}`);return{ok:true,message:'Announcement deleted.'}}
    throw E('Bad request')}
@@ -539,7 +586,12 @@ function route(p,q,b,post){
   if(featureEnabled('feature.login_otp',null)){
    const code=genOtp(),challenge=Math.random().toString(36).slice(2)+Date.now().toString(36);
    otps.set(challenge,{role:'developer',userId:d.id,code,attempts:0,expiresAt:Date.now()+OTP_MS});
-   return{ok:true,otp_required:true,challenge,sent_to:maskEmail(d.email||db.profile.email),demo_code:code}}
+   let sentTo=null;
+   if(featureEnabled('feature.sms',null)&&d.phone){
+    const sr=mockSendSms({to:d.phone,message:`Your Kingdom Heralds Developer code is: ${code}. It expires in 10 minutes.`,kind:'staff_otp',by:'developer:'+un});
+    if(sr.ok)sentTo=maskPhone(sr.to||d.phone)}
+   if(!sentTo)sentTo=maskEmail(d.email||db.profile.email);
+   return{ok:true,otp_required:true,challenge,sent_to:sentTo,demo_code:code}}
   clearFail(k);S.d=d.id;S.s=null;devLog(d.id,'login',d.username);return{ok:true}}
  if(p==='/api/dev/otp'){
   const ch=String(b.challenge||''),entry=otps.get(ch);
@@ -564,6 +616,13 @@ function route(p,q,b,post){
    const on=!!b.enabled;const ex=db.feature_flags.find(f=>f.key===key&&f.unit_id===uid);
    if(ex)ex.enabled=on;else db.feature_flags.push({id:nid(),key,unit_id:uid,enabled:on});
    devLog(me.id,'flag_set',`${key}@${uid??'global'}=${on}`);return{ok:true,message:`${key} set to ${on?'ON':'OFF'} (${uid?bn(uid):'Global'}).`}}
+  if(p==='/api/dev/sms'){
+   if(!post)return{rows:db.sms_log.slice(0,100),enabled:featureEnabled('feature.sms',null),sandbox:true,configured:true};
+   const ph=parsePhone(b.to);if(!ph)throw E('Enter a valid Zambian phone number (e.g. 0971234567 or +260971234567).');
+   const txt=String(b.message||'Kingdom Heralds International: Test SMS from Developer Console.').trim()||'Test SMS';
+   const res=mockSendSms({to:ph,message:txt,kind:'test',by:'developer:'+me.username});
+   devLog(me.id,'test_sms',`${ph}: ${res.status}`);
+   return{ok:res.ok,result:res,message:res.ok?`Test SMS sent to ${ph} (${res.status}${res.cost?', '+res.cost:''}).`:`Error: SMS send failed — ${res.status}`}}
   if(p==='/api/dev/users'){
    if(!post){const lk=new Set(lockedIdents());
     return{staff:db.staff.map(s=>({...s,unit:s.branch_id?bn(s.branch_id):'All',locked:lk.has('s:'+s.username.toLowerCase())})),members:db.members.map(m=>({...m,unit:bn(m.branch_id),locked:lk.has(m.phone)})),people:db.people.map(x=>({...x,unit:bn(x.branch_id)})),devAccounts:db.dev_accounts.map(a=>({...a,locked:lk.has('d:'+a.username.toLowerCase())})),units:db.branches.map(U),grantable:GRANT,locks:[...lk].map(ident=>({ident}))}}
@@ -576,7 +635,8 @@ function route(p,q,b,post){
      if(role!=='superadmin'&&!db.branches.some(x=>x.id===br))throw E('Choose a church unit.');
      if(db.staff.some(s=>s.username===String(b.username||'').trim()))throw E('Username already taken.');
      if(role==='secretary'&&db.staff.some(s=>s.role==='secretary'&&s.branch_id===br&&s.slot===slot))throw E('That slot already has a secretary.');
-     const s={id:nid(),role,branch_id:br,slot,privileges:chkPrivs(role,b.privileges),username:String(b.username||'').trim(),full_name:String(b.name||'').trim(),email:'',active:true};
+     const em=parseEmail(b.email),ph=parsePhone(b.phone);
+     const s={id:nid(),role,branch_id:br,slot,privileges:chkPrivs(role,b.privileges),username:String(b.username||'').trim(),full_name:String(b.name||'').trim(),email:em,phone:ph,active:true};
      db.staff.push(s);db.pw['s'+s.id]=b.password;devLog(me.id,'dev_create_staff',`${role}:${s.username}`);return{ok:true,message:'Staff account created.'}}
     const s=db.staff.find(x=>x.id===+b.id);if(!s)throw E('Not found',404);
     if(b.a==='update'){const role=['superadmin','admin','secretary'].includes(b.role)?b.role:s.role,br=role==='superadmin'?null:+b.branch_id,slot=role==='secretary'?(b.slot==='assistant'?'assistant':'main'):null;
@@ -630,7 +690,7 @@ function route(p,q,b,post){
      u.name=String(b.name||u.name).trim();if(b.kind)u.kind=b.kind;u.parent_id=par;u.momo_number=b.momo_number||null;devLog(me.id,'update_unit',labelOf(u));return{ok:true,message:'Unit saved.'}}
     if(b.a==='delete'){db.branches=db.branches.filter(x=>x!==u);devLog(me.id,'delete_unit',u.name);return{ok:true,message:'Unit deleted.'}}}
    throw E('Bad request')}
-  if(p==='/api/dev/data'){const TABLES={offerings:()=>db.offerings,pledges:()=>db.pledges,pledge_payments:()=>db.payments,expenses:()=>db.expenses,branch_budgets:()=>db.branch_budgets,announcements:()=>db.announcements,approval_requests:()=>db.approvals,events:()=>db.events,programs:()=>db.programs,services:()=>db.services,attendance:()=>db.attendance,notifications:()=>db.notifications,assets:()=>db.assets,audit_log:()=>db.audit,dev_audit:()=>db.dev_audit};
+  if(p==='/api/dev/data'){const TABLES={offerings:()=>db.offerings,pledges:()=>db.pledges,pledge_payments:()=>db.payments,expenses:()=>db.expenses,branch_budgets:()=>db.branch_budgets,announcements:()=>db.announcements,approval_requests:()=>db.approvals,events:()=>db.events,programs:()=>db.programs,services:()=>db.services,attendance:()=>db.attendance,notifications:()=>db.notifications,assets:()=>db.assets,sms_log:()=>db.sms_log,audit_log:()=>db.audit,dev_audit:()=>db.dev_audit};
    const tbl=String(q.table||b.table||'offerings');if(!TABLES[tbl])throw E('Unknown table.');
    if(!post)return{table:tbl,tables:Object.keys(TABLES),rows:TABLES[tbl]().slice(0,200)};
    const arr=TABLES[tbl]();

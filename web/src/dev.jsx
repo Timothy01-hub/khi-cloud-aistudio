@@ -1,7 +1,7 @@
 import {useCallback,useEffect,useState} from 'react';
 import {useNavigate,useSearchParams} from 'react-router-dom';
 import {api} from './api.js';
-import {BrandLogo,Msg,Scroll,Loading,useAct} from './ui.jsx';
+import {BrandLogo,Msg,Scroll,Loading,useAct,when} from './ui.jsx';
 import {ADMIN_LABEL,AdminTabBody} from './admin.jsx';
 
 const small={padding:'.2rem .6rem',width:'auto'};
@@ -233,7 +233,35 @@ function ChurchTab({units,onUnitsChange}){
  </>;
 }
 
-const TABS=[['flags','Flags & Stubs'],['users','Users & Roles'],['settings','Settings & Units'],['data','Data'],['church','Church']];
+function SmsTab(){
+ const [d,setD]=useState(null),[msg,setMsg]=useState(''),[err,setErr]=useState('');
+ const [to,setTo]=useState(''),[text,setText]=useState('Kingdom Heralds International: Test SMS from Developer Console.');
+ const load=useCallback(async()=>{try{setD(await api('/api/dev/sms'));setErr('')}catch(x){setErr(x.message)}},[]);
+ useEffect(()=>{load()},[load]);
+ const act=useAct(setMsg,load);
+ if(!d)return <Loading err={err}/>;
+ const sendTest=async e=>{e.preventDefault();await act('/api/dev/sms',{to,message:text})};
+ return <><Msg m={msg}/>
+  <form className="card" onSubmit={sendTest}>
+   <h3>Africa&apos;s Talking SMS — {d.enabled?'ON':'OFF'} ({d.sandbox?'Sandbox':'Live'})</h3>
+   <p className="muted">Env status: {d.configured?'AT credentials configured':'AT_USERNAME / AT_API_KEY missing'}. Zambian numbers are normalised to +260XXXXXXXXX.</p>
+   <input inputMode="tel" placeholder="Test recipient phone (e.g. 0971234567)" value={to} onChange={e=>setTo(e.target.value)} required/>
+   <textarea rows={2} placeholder="Test SMS message" value={text} onChange={e=>setText(e.target.value)} required/>
+   <button style={{width:'auto'}}>Send test SMS</button>
+  </form>
+  <div className="card"><h3>SMS log ({d.rows.length})</h3>
+   <Scroll><table><thead><tr><th>Time</th><th>Kind</th><th>Recipient</th><th>Status</th><th>Cost</th><th>Message</th></tr></thead><tbody>
+    {!d.rows.length?<tr><td colSpan={6} className="muted">No SMS messages sent yet.</td></tr>:d.rows.map(r=><tr key={r.id}>
+     <td>{when(r.created_at)}</td><td><span className="tag">{r.kind}</span></td><td style={{fontFamily:'monospace'}}>{r.to_phone}</td>
+     <td><span className={'tag '+(r.ok?'digital':'physical')}>{r.status}</span>{r.error&&!r.ok&&<div className="muted">{r.error}</div>}</td>
+     <td>{r.cost||'—'}</td><td>{r.message}</td>
+    </tr>)}
+   </tbody></table></Scroll>
+  </div>
+ </>;
+}
+
+const TABS=[['flags','Flags & Stubs'],['users','Users & Roles'],['settings','Settings & Units'],['data','Data'],['sms','SMS'],['church','Church']];
 export function DevHome(){
  const [sp,setSp]=useSearchParams(),nav=useNavigate(),[me,setMe]=useState(null),[fail,setFail]=useState(false);
  const loadMe=useCallback(()=>{api('/api/dev/me').then(setMe).catch(()=>setFail(true))},[]);
@@ -244,5 +272,5 @@ export function DevHome(){
  const logout=async()=>{await api('/api/dev/logout',{}).catch(()=>{});nav('/')};
  return <><header><div style={{display:'flex',alignItems:'center',gap:'.6rem',flexWrap:'wrap'}}><BrandLogo sub="Developer"/> <span className="muted">· {me.dev.full_name}</span></div>
   <nav>{TABS.map(([k,l])=><a key={k} href="#" className={tab===k?'on':''} onClick={e=>{e.preventDefault();setSp({p:k})}}>{l}</a>)}<a href="#" onClick={e=>{e.preventDefault();logout()}}>Log out</a></nav></header>
-  <main key={tab}>{tab==='flags'&&<FlagsTab units={me.units}/>}{tab==='users'&&<UsersTab/>}{tab==='settings'&&<SettingsTab/>}{tab==='data'&&<DataTab/>}{tab==='church'&&<ChurchTab units={me.units} onUnitsChange={loadMe}/>}</main></>;
+  <main key={tab}>{tab==='flags'&&<FlagsTab units={me.units}/>}{tab==='users'&&<UsersTab/>}{tab==='settings'&&<SettingsTab/>}{tab==='data'&&<DataTab/>}{tab==='sms'&&<SmsTab/>}{tab==='church'&&<ChurchTab units={me.units} onUnitsChange={loadMe}/>}</main></>;
 }

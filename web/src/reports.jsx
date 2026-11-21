@@ -1,7 +1,4 @@
 import {useEffect,useState} from 'react';
-import * as XLSX from 'xlsx';
-import {jsPDF} from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import {api} from './api.js';
 import {Msg,Scroll,money,today} from './ui.jsx';
 const MONEY=['Amount','Pledged','Paid','Balance','Income','Approved_Expenses','Budget','Actual','Remaining'],KINDS=[['offerings','Offerings & payments'],['pledges','Pledges'],['people','People directory'],['attendance','Attendance register']];
@@ -19,14 +16,17 @@ export function Reports({base,admin,unitId=''}){
  const branchSlug=String(rawBranch||'All-branches').trim().replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'All-branches';
  const fileBase=`KHI-${f.kind}-${branchSlug}-${today()}`;
  const cellText=(c,v)=>MONEY.includes(c)?money(v):c==='Pct_Used'?`${v}%`:String(v??'');
- const exportExcel=()=>{
+ const exportExcel=async()=>{
+  const m=await import('xlsx'),XLSX=m.utils?m:m.default;
   const data=rows.map(r=>Object.fromEntries(cols.map(c=>[hd(c),r[c]])));
   const ws=XLSX.utils.json_to_sheet(data);
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,f.kind.slice(0,31));
   XLSX.writeFile(wb,`${fileBase}.xlsx`);
  };
- const exportPdf=()=>{
+ const exportPdf=async()=>{
+  const [mJ,mA]=await Promise.all([import('jspdf'),import('jspdf-autotable')]);
+  const jsPDF=mJ.jsPDF||mJ.default?.jsPDF||mJ.default,autoTable=mA.default||mA.autoTable;
   const doc=new jsPDF({orientation:cols.length>6?'landscape':'portrait',unit:'pt',format:'a4'});
   doc.setFontSize(13);
   doc.text(`Kingdom Heralds International — ${kinds.find(x=>x[0]===f.kind)?.[1]||f.kind}`,40,40);

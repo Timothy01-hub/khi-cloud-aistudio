@@ -72,10 +72,10 @@ dv.fill('Username','timothy');dv.fill('Password','demo1234');dv.submit(dv.form('
 ok('/dev/: Timothy logs into Developer console with all tabs',await dv.until(()=>dv.t().includes('Developer · Timothy')&&['Flags & Stubs','Users & Roles','Settings & Units','Data'].every(x=>dv.btn(x))));
 ok('/dev/: future stubs are listed and OFF by default',await dv.until(()=>dv.t().includes('SMS notifications')&&dv.t().includes('Mobile-money payments')&&dv.t().includes('Backups and data export')&&dv.t().includes('Multi-language')&&dv.t().includes('API keys')&&dv.t().includes('Payments reports')));
 
-// Toggle a stub ON via UI
+// Toggle SMS notifications ON via UI
 const smsRow=dv.qa('tr').find(r=>r.textContent.includes('SMS notifications'));
 dv.click(dv.btn('ON',smsRow));
-ok('/dev/: stub.sms switched ON via UI',await dv.until(()=>dv.t().includes('stub.sms set to ON')));
+ok('/dev/: feature.sms switched ON via UI',await dv.until(()=>dv.t().includes('feature.sms set to ON')));
 
 // Toggle member.menu.pledges OFF globally via UI
 const plRow=dv.qa('tr').find(r=>r.textContent.includes('Member menu: Pledges'));

@@ -37,13 +37,13 @@ function Overview({unitId=''}){const [d,load,err]=useData(uPath('/api/admin/over
 
 async function apiGet(path){const {api}=await import('./api.js');return api(path)}
 
-function Slot({f,slot,label,s,act}){const [pw,setPw]=useState(''),[em,setEm]=useState(s?.email||'');
- useEffect(()=>{setEm(s?.email||'')},[s?.email]);
+function Slot({f,slot,label,s,act}){const [pw,setPw]=useState(''),[em,setEm]=useState(s?.email||''),[ph,setPh]=useState(s?.phone||'');
+ useEffect(()=>{setEm(s?.email||'');setPh(s?.phone||'')},[s?.email,s?.phone]);
  if(!s)return <div className="slot"><b>{label}</b><form onSubmit={async e=>{e.preventDefault();const form=e.currentTarget,r=await act('/api/admin/account',{a:'create',branch:f.id,slot,...Object.fromEntries(new FormData(form))});if(r)form.reset()}}>
-  <input name="name" placeholder="Full name" required/><input name="username" placeholder="Username" required/><input name="email" type="email" placeholder="Email (for login code, optional)"/><input name="password" placeholder="Password (8+)" required/><button>Create account</button></form></div>;
+  <input name="name" placeholder="Full name" required/><input name="username" placeholder="Username" required/><input name="email" type="email" placeholder="Email (for login code, optional)"/><input name="phone" inputMode="tel" placeholder="Phone (for SMS code, optional)"/><input name="password" placeholder="Password (8+)" required/><button>Create account</button></form></div>;
  return <div className="slot"><b>{label}</b><p>{s.full_name} · <span className="muted">@{s.username}</span> · {s.active?'Active':<span style={{color:'#e57'}}>Disabled</span>}{s.locked&&<> · <span className="badge">LOCKED</span></>}</p>
-  <p className="muted" style={{marginTop:0}}>Login code email: {s.email||'church profile fallback'}</p>
-  <form onSubmit={async e=>{e.preventDefault();await act('/api/admin/account',{a:'email',id:s.id,email:em})}}><input type="email" value={em} onChange={e=>setEm(e.target.value)} placeholder="Email (for login code)"/><button className="ghost">Save email</button></form>
+  <p className="muted" style={{marginTop:0}}>Login code email: {s.email||'church profile fallback'}{s.phone?` · SMS phone: ${s.phone}`:''}</p>
+  <form onSubmit={async e=>{e.preventDefault();await act('/api/admin/account',{a:'email',id:s.id,email:em,phone:ph})}}><input type="email" value={em} onChange={e=>setEm(e.target.value)} placeholder="Email (for login code)"/><input inputMode="tel" value={ph} onChange={e=>setPh(e.target.value)} placeholder="Phone (for SMS code, optional)"/><button className="ghost">Save email &amp; phone</button></form>
   <form onSubmit={async e=>{e.preventDefault();const r=await act('/api/admin/account',{a:'password',id:s.id,password:pw});if(r)setPw('')}}><input value={pw} onChange={e=>setPw(e.target.value)} placeholder="New password (8+)" required/><button className="ghost">Change password</button></form>
   {s.locked&&<button type="button" style={{marginBottom:'.3rem'}} onClick={()=>act('/api/admin/unlock',{ident:'s:'+s.username.toLowerCase()})}>Unlock account</button>}
   <button className="ghost" onClick={()=>act('/api/admin/account',{a:'toggle',id:s.id})}>{s.active?'Disable':'Enable'}</button>
@@ -175,18 +175,18 @@ function Privs({d,value,onChange}){return <div><p className="muted">Privileges t
  {d.grantable.map(([k,l])=><label key={k} className="muted" style={{display:'flex',gap:'.5rem',textAlign:'left'}}><input type="checkbox" style={{width:'auto'}} checked={value.includes(k)} onChange={e=>onChange(e.target.checked?[...value,k]:value.filter(x=>x!==k))}/> {l}</label>)}
  <p className="muted" style={{marginTop:'.6rem'}}>🔒 Reserved for the Super Admin (can never be given to an admin):</p>
  {d.blocked.map(([k,l])=><label key={k} className="muted" style={{display:'flex',gap:'.5rem',opacity:.55,textAlign:'left'}}><input type="checkbox" style={{width:'auto'}} disabled/> {l}</label>)}</div>}
-function AdminCard({a,d,act}){const [p,setP]=useState(a.privileges),[pw,setPw]=useState(''),[em,setEm]=useState(a.email||'');
- useEffect(()=>{setEm(a.email||'')},[a.email]);
+function AdminCard({a,d,act}){const [p,setP]=useState(a.privileges),[pw,setPw]=useState(''),[em,setEm]=useState(a.email||''),[ph,setPh]=useState(a.phone||'');
+ useEffect(()=>{setEm(a.email||'');setPh(a.phone||'')},[a.email,a.phone]);
  return <div className="card"><h3>{a.full_name} <span className="muted">@{a.username}</span></h3><p>{a.unit} · {a.active?'Active':<span style={{color:'#e57'}}>Disabled</span>}{a.locked&&<> · <span className="badge">LOCKED</span></>}</p>
-  <p className="muted" style={{marginTop:0}}>Login code email: {a.email||'church profile fallback'}</p>
+  <p className="muted" style={{marginTop:0}}>Login code email: {a.email||'church profile fallback'}{a.phone?` · SMS phone: ${a.phone}`:''}</p>
   <Privs d={d} value={p} onChange={setP}/>
   {a.locked&&<button type="button" style={{marginBottom:'.4rem'}} onClick={()=>act('/api/admin/unlock',{ident:'s:'+a.username.toLowerCase()})}>Unlock account</button>}
   <button className="ghost" onClick={()=>act('/api/admin/admin',{a:'privileges',id:a.id,privileges:p})}>Save privileges</button>
-  <form onSubmit={async e=>{e.preventDefault();await act('/api/admin/admin',{a:'email',id:a.id,email:em})}}><input type="email" value={em} onChange={e=>setEm(e.target.value)} placeholder="Email (for login code)"/><button className="ghost">Save email</button></form>
+  <form onSubmit={async e=>{e.preventDefault();await act('/api/admin/admin',{a:'email',id:a.id,email:em,phone:ph})}}><input type="email" value={em} onChange={e=>setEm(e.target.value)} placeholder="Email (for login code)"/><input inputMode="tel" value={ph} onChange={e=>setPh(e.target.value)} placeholder="Phone (for SMS code, optional)"/><button className="ghost">Save email &amp; phone</button></form>
   <form onSubmit={async e=>{e.preventDefault();const r=await act('/api/admin/admin',{a:'password',id:a.id,password:pw});if(r)setPw('')}}><input value={pw} onChange={e=>setPw(e.target.value)} placeholder="New password (8+)" required/><button className="ghost">Change password</button></form>
   <button className="ghost" onClick={()=>act('/api/admin/admin',{a:'toggle',id:a.id})}>{a.active?'Disable':'Enable'}</button>
   <button className="danger" onClick={()=>window.confirm('Delete this admin?')&&act('/api/admin/admin',{a:'delete',id:a.id})}>Delete</button></div>}
-function Admins({unitId=''}){const [d,load,err]=useData(uPath('/api/admin/admins',unitId)),[lkData,loadLk]=useData(uPath('/api/admin/locks',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,async()=>{await load();await loadLk()},unitId),E0={name:'',username:'',email:'',password:'',branch:'',privileges:['attendance','reports']},[v,setV]=useState(E0),set=k=>e=>setV({...v,[k]:e.target.value});if(!d)return <Loading err={err}/>;
+function Admins({unitId=''}){const [d,load,err]=useData(uPath('/api/admin/admins',unitId)),[lkData,loadLk]=useData(uPath('/api/admin/locks',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,async()=>{await load();await loadLk()},unitId),E0={name:'',username:'',email:'',phone:'',password:'',branch:'',privileges:['attendance','reports']},[v,setV]=useState(E0),set=k=>e=>setV({...v,[k]:e.target.value});if(!d)return <Loading err={err}/>;
  return <><Msg m={msg}/>
   {(lkData?.locks||[]).length>0&&<div className="card"><h3>Locked accounts (15-min password lock)</h3>
    <Scroll><table><thead><tr><th>Account</th><th>Type</th><th>Church</th><th/></tr></thead><tbody>
@@ -194,10 +194,10 @@ function Admins({unitId=''}){const [d,load,err]=useData(uPath('/api/admin/admins
      <td><button type="button" style={small} onClick={()=>act('/api/admin/unlock',{ident:l.ident})}>Unlock</button></td></tr>)}
    </tbody></table></Scroll></div>}
   <form className="card" onSubmit={async e=>{e.preventDefault();const r=await act('/api/admin/admin',{a:'create',...v});if(r)setV(E0)}}><h3>Create an admin</h3>
-   <input placeholder="Full name" value={v.name} onChange={set('name')} required/><input placeholder="Username" value={v.username} onChange={set('username')} required/><input type="email" placeholder="Email (for login code, optional)" value={v.email} onChange={set('email')}/><input placeholder="Password (8+)" value={v.password} onChange={set('password')} required/>
+   <input placeholder="Full name" value={v.name} onChange={set('name')} required/><input placeholder="Username" value={v.username} onChange={set('username')} required/><input type="email" placeholder="Email (for login code, optional)" value={v.email} onChange={set('email')}/><input inputMode="tel" placeholder="Phone (for SMS code, optional)" value={v.phone} onChange={set('phone')}/><input placeholder="Password (8+)" value={v.password} onChange={set('password')} required/>
    <select value={v.branch} onChange={set('branch')} required><option value="">Which centre, branch or fellowship will they run?</option>{d.units.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}</select>
    <Privs d={d} value={v.privileges} onChange={p=>setV({...v,privileges:p})}/><button>Create admin</button></form>
-  <div className="grid">{d.admins.map(a=><AdminCard key={a.id+a.privileges.join()+String(!!a.locked)+(a.email||'')} a={a} d={d} act={act}/>)}</div></>}
+  <div className="grid">{d.admins.map(a=><AdminCard key={a.id+a.privileges.join()+String(!!a.locked)+(a.email||'')+(a.phone||'')} a={a} d={d} act={act}/>)}</div></>}
 
 function Leaders({unitId=''}){const [sp,setSp]=useSearchParams(),q=sp.get('q')||'',[qq,setQq]=useState(q),[d,load,err]=useData(uPath('/api/admin/leaders?q='+encodeURIComponent(q),unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId);if(!d)return <Loading err={err}/>;
  return <><Msg m={msg}/><p className="muted">Only the Super Admin can make someone a Leader or remove that status. Nobody else can, and the database refuses any other route.</p>
@@ -233,10 +233,10 @@ function Profile({onChange,unitId=''}){const [d,load,err]=useData(uPath('/api/ad
     {lkData.locks.map(l=><tr key={l.ident}><td>{l.label}</td><td>{l.kind}</td><td>{l.unit||'—'}</td><td><button type="button" style={small} onClick={()=>act('/api/admin/unlock',{ident:l.ident})}>Unlock</button></td></tr>)}
    </tbody></table></Scroll>}</div></>}
 
-const EMPTY_ANN={title:'',body:'',expires_at:'',branch:''};
+const EMPTY_ANN={title:'',body:'',expires_at:'',branch:'',send_sms:false};
 function Announcements({unitId=''}){
  const [d,load,err]=useData(uPath('/api/admin/announcements',unitId)),[msg,setMsg]=useState(''),act=useUAct(setMsg,load,unitId);
- const [v,setV]=useState(EMPTY_ANN),[editId,setEditId]=useState(null),set=k=>e=>setV({...v,[k]:e.target.value});
+ const [v,setV]=useState(EMPTY_ANN),[editId,setEditId]=useState(null),set=k=>e=>setV({...v,[k]:e.target.type==='checkbox'?e.target.checked:e.target.value});
  if(!d)return <Loading err={err}/>;
  const save=async e=>{e.preventDefault();
   const payload=editId?{a:'edit',id:editId,...v}:{a:'add',...v};
@@ -251,6 +251,7 @@ function Announcements({unitId=''}){
     <select value={v.branch} onChange={set('branch')} required={!d.canAll}><option value="">{d.canAll?'All branches':'Choose branch…'}</option>{d.units.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}</select>
     <label className="muted">Expiry date (optional)<input type="date" value={v.expires_at} onChange={set('expires_at')}/></label>
    </div>
+   {d.smsEnabled&&<label className="muted" style={{display:'flex',gap:'.5rem',alignItems:'center',margin:'.4rem 0'}}><input type="checkbox" style={{width:'auto'}} checked={!!v.send_sms} onChange={set('send_sms')}/> Also send by SMS</label>}
    <div style={{display:'flex',gap:'.5rem',flexWrap:'wrap'}}>
     <button style={{width:'auto'}}>{editId?'Save announcement':'Post announcement'}</button>
     {editId&&<button type="button" className="ghost" style={{width:'auto'}} onClick={()=>{setEditId(null);setV(EMPTY_ANN)}}>Cancel</button>}
@@ -263,7 +264,7 @@ function Announcements({unitId=''}){
     <td>{a.expires_at||'No expiry'}</td>
     <td><span className={'tag '+(a.active?'digital':'leader')}>{a.active?'Active':'Expired'}</span></td>
     <td style={{display:'flex',gap:'.3rem',flexWrap:'wrap'}}>
-     <button type="button" className="ghost" style={small} onClick={()=>{setEditId(a.id);setV({title:a.title,body:a.body,expires_at:a.expires_at||'',branch:a.branch_id==null?'':String(a.branch_id)})}}>Edit</button>
+     <button type="button" className="ghost" style={small} onClick={()=>{setEditId(a.id);setV({title:a.title,body:a.body,expires_at:a.expires_at||'',branch:a.branch_id==null?'':String(a.branch_id),send_sms:false})}}>Edit</button>
      <button type="button" className="danger" style={small} onClick={()=>window.confirm('Delete this announcement?')&&act('/api/admin/announcements',{a:'delete',id:a.id})}>Delete</button>
     </td>
    </tr>)}

@@ -18,8 +18,45 @@ const BLOCK=[['units','Add or edit centres, branches and fellowships'],['admins'
 const EXP_CATS=['Utilities','Welfare','Maintenance','Transport','Supplies','Ministry Event','Equipment','Other'];
 const kidsOf=(all,id)=>{const out=[id];for(const b of all)if(b.parent_id===id)out.push(...kidsOf(all,b.id));return out};
 const randOtp=()=>{const a=new Uint32Array(1);crypto.getRandomValues(a);return String(100000+(a[0]%900000))};
+const smsPhone=s=>{let d=String(s||'').replace(/\D/g,'');if(!d)return null;if(d.startsWith('00260')&&d.length===14)d=d.slice(2);else if(d.startsWith('2600')&&d.length===13)d='260'+d.slice(4);else if(d.length===10&&d.startsWith('0'))d='260'+d.slice(1);else if(d.length===9&&!d.startsWith('0'))d='260'+d;return /^260\d{9}$/.test(d)?'+'+d:null};
+const maskPhone=p=>{const n=smsPhone(p)||String(p||'').trim();if(n.length<8)return n||'phone';return n.slice(0,6)+'***'+n.slice(-3)};
 const maskEmail=e=>{const s=String(e||'').trim();const i=s.indexOf('@');if(i<2)return s?s[0]+'***'+(i>=0?s.slice(i):''):'church office email';return s[0]+'***'+s.slice(i-1)};
 const parseEmail=e=>{const s=String(e||'').trim();if(!s)return{ok:true,val:null};if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s))return{ok:false,val:null};return{ok:true,val:s}};
+const parsePhone=p=>{const s=String(p||'').trim();if(!s)return{ok:true,val:null};const n=smsPhone(s);if(!n)return{ok:false,val:null};return{ok:true,val:n}};
+const smsOn=async(env,unitId=null)=>{try{return(await rpc(env,'feature_enabled',{p_key:'feature.sms',p_unit:unitId}))===true}catch{return false}};
+async function sendSms(env,{to,message,kind='general',branch_id=null,by='system',dbWrite=null}){
+ const rawList=Array.isArray(to)?to:[to];
+ const list=[...new Set(rawList.map(smsPhone).filter(Boolean))];
+ const msg=String(message||'').trim().slice(0,640);
+ const writeLog=dbWrite||((path,o)=>sb(env,path,o));
+ const saveRows=async rows=>{if(!rows.length)return;try{await writeLog('sms_log',{m:'POST',b:rows,prefer:'return=minimal'})}catch{}};
+ if(!list.length)return{ok:false,to:null,status:'Invalid phone number',cost:null,error:'Invalid phone number'};
+ if(!env.AT_USERNAME||!env.AT_API_KEY){
+  const err='Missing AT credentials';
+  await saveRows(list.map(ph=>({branch_id,kind,to_phone:ph,message:msg,status:err,status_code:null,cost:null,message_id:null,ok:false,error:err,created_by:by})));
+  return{ok:false,to:list[0],status:err,cost:null,error:err}}
+ try{
+  const base=env.AT_SANDBOX==='true'?'https://api.sandbox.africastalking.com':'https://api.africastalking.com';
+  const params=new URLSearchParams({username:env.AT_USERNAME,to:list.join(','),message:msg});
+  if(env.AT_SENDER_ID)params.set('from',env.AT_SENDER_ID);
+  const r=await fetch(base+'/version1/messaging',{method:'POST',headers:{apiKey:env.AT_API_KEY,Accept:'application/json','Content-Type':'application/x-www-form-urlencoded'},body:params.toString()});
+  const txt=await r.text().catch(()=>'');
+  let j=null;try{j=txt?JSON.parse(txt):null}catch{}
+  const recs=Array.isArray(j?.SMSMessageData?.Recipients)?j.SMSMessageData.Recipients:[];
+  if(recs.length){
+   const rows=recs.map(rec=>{
+    const sc=rec.statusCode,st=String(rec.status||'');
+    const okSt=r.ok&&(sc===100||sc===101||sc===102||/^(Success|Sent|Queued|Processed)$/i.test(st));
+    return{branch_id,kind,to_phone:smsPhone(rec.number)||String(rec.number||list[0]),message:msg,status:String(rec.status||(okSt?'Success':'Failed')).slice(0,120),status_code:Number.isFinite(+sc)?+sc:null,cost:rec.cost!=null?String(rec.cost):null,message_id:rec.messageId!=null?String(rec.messageId):null,ok:!!okSt,error:okSt?null:String(rec.status||j?.SMSMessageData?.Message||'Send failed').slice(0,255),created_by:by}});
+   await saveRows(rows);
+   return{ok:rows.some(x=>x.ok),to:rows[0].to_phone,status:rows[0].status,cost:rows[0].cost,recipients:rows}}
+  const stTxt=String(j?.SMSMessageData?.Message||txt||('HTTP '+r.status)).slice(0,120)||'HTTP '+r.status;
+  await saveRows(list.map(ph=>({branch_id,kind,to_phone:ph,message:msg,status:stTxt,status_code:null,cost:null,message_id:null,ok:false,error:stTxt,created_by:by})));
+  return{ok:false,to:list[0],status:stTxt,cost:null,error:stTxt}
+ }catch(e){
+  const stTxt=String(e?.message||'Network error').slice(0,120);
+  await saveRows(list.map(ph=>({branch_id,kind,to_phone:ph,message:msg,status:stTxt,status_code:null,cost:null,message_id:null,ok:false,error:stTxt,created_by:by})));
+  return{ok:false,to:list[0],status:stTxt,cost:null,error:stTxt}}}
 async function sendOtpEmail(env,toEmail,name,role,code){
  const email=String(toEmail||'').trim()||env.NOTIFY_EMAIL||'';
  let target=email;
@@ -106,9 +143,25 @@ async function route(req,env,p,q){
   if(await rpc(env,'login_locked',{p_ident:ph,p_ip:ip}))return bad('Too many failed attempts. Please wait 15 minutes and try again.',429);
   const id=await rpc(env,'member_login',{p_phone:ph,p_password:String(b.password||'')});
   if(!id){await rpc(env,'login_fail',{p_ident:ph,p_ip:ip});return bad('Wrong phone number or password.',401)}
-  const mem=(await sb(env,`members?id=eq.${id}&select=branch_id`))[0];
+  const mem=(await sb(env,`members?id=eq.${id}&select=id,branch_id,full_name,phone`))[0];
   if(mem&&!await featOn(env,'app.member',mem.branch_id))return bad('This app is currently disabled.',403);
+  if(await smsOn(env,mem?.branch_id||null)){
+   const code=randOtp();
+   const challenge=await rpc(env,'create_login_otp',{p_role:'member',p_user_id:id,p_code:code,p_ttl_seconds:600});
+   const sr=await sendSms(env,{to:mem?.phone||ph,message:`Your Kingdom Heralds verification code is: ${code}. It expires in 10 minutes.`,kind:'member_otp',branch_id:mem?.branch_id||null,by:'member:'+ph});
+   const sentTo=sr.ok?maskPhone(sr.to||mem?.phone||ph):await sendOtpEmail(env,null,mem?.full_name||'Member','member',code);
+   return json({ok:true,otp_required:true,challenge,sent_to:sentTo})}
   await rpc(env,'login_clear',{p_ident:ph});return json({ok:true},200,await mkCookie(env,id))}
+ if(p==='/api/member/otp'&&post){
+  const vr=(await rpc(env,'verify_login_otp',{p_token:String(b.challenge||''),p_code:String(b.code||'')}))[0];
+  if(!vr||!vr.ok||vr.role!=='member'){
+   if(vr?.user_id){const mm=(await sb(env,`members?id=eq.${vr.user_id}&select=phone`).catch(()=>[]))[0];if(mm)await rpc(env,'login_fail',{p_ident:mm.phone,p_ip:ip})}
+   return bad(vr?.err||'Invalid verification code.',401)}
+  const mem=(await sb(env,`members?id=eq.${vr.user_id}&select=id,branch_id,phone`))[0];
+  if(!mem)return bad('Wrong phone number or password.',401);
+  if(await rpc(env,'login_locked',{p_ident:mem.phone,p_ip:ip}))return bad('Too many failed attempts. Please wait 15 minutes and try again.',429);
+  if(!await featOn(env,'app.member',mem.branch_id))return bad('This app is currently disabled.',403);
+  await rpc(env,'login_clear',{p_ident:mem.phone});return json({ok:true},200,await mkCookie(env,mem.id))}
  if(p==='/api/member/register'&&post){
   const bs=await sb(env,'branches?select=id');
   if(!await featOn(env,'app.member',+b.branch||null))return bad('This app is currently disabled.',403);
@@ -217,12 +270,16 @@ async function staffRoute(req,env,p,q,b,ip){
   if(await rpc(env,'login_locked',{p_ident:id,p_ip:ip}))return bad('Too many failed attempts. Please wait 15 minutes or ask the Super Admin to unlock.',429);
   const r=(await rpc(env,'staff_login',{p_username:un,p_password:String(b.password||''),p_role:role}))[0];
   if(!r){await rpc(env,'login_fail',{p_ident:id,p_ip:ip});return bad('Invalid login or account disabled.',401)}
-  const st=(await sb(env,`staff?id=eq.${r.id}&select=id,branch_id,full_name,username,email`))[0];
+  const st=(await sb(env,`staff?id=eq.${r.id}&select=id,branch_id,full_name,username,email,phone`))[0];
   if(!await featOn(env,'app.'+role,st?.branch_id||null))return bad('This app is currently disabled.',403);
   if(await featOn(env,'feature.login_otp',st?.branch_id||null)){
    const code=randOtp();
    const challenge=await rpc(env,'create_login_otp',{p_role:role,p_user_id:r.id,p_code:code,p_ttl_seconds:600});
-   const sentTo=await sendOtpEmail(env,st?.email,st?.full_name||un,role,code);
+   let sentTo=null;
+   if(await smsOn(env,st?.branch_id||null)&&st?.phone){
+    const sr=await sendSms(env,{to:st.phone,message:`Your Kingdom Heralds verification code is: ${code}. It expires in 10 minutes.`,kind:'staff_otp',branch_id:st?.branch_id||null,by:role+':'+un});
+    if(sr.ok)sentTo=maskPhone(sr.to||st.phone)}
+   if(!sentTo)sentTo=await sendOtpEmail(env,st?.email,st?.full_name||un,role,code);
    return json({ok:true,otp_required:true,challenge,sent_to:sentTo})}
   await rpc(env,'login_clear',{p_ident:id});
   await sb(env,'audit_log',{m:'POST',b:{actor:role+':'+un,action:'login',ip},prefer:'return=minimal'});
@@ -270,18 +327,25 @@ async function staffRoute(req,env,p,q,b,ip){
   const a=Math.round(parseFloat(b.amount)*100)/100,cat=['Offering','Tithe','Seed','Thanksgiving','Building Fund'].includes(b.category)?b.category:'Offering';
   if(!(a>0&&a<1e7))return bad('Enter a valid amount.');
   const senderStr=String(b.sender||'').trim().slice(0,120)||null;
-  let midLink=b.member_id?+b.member_id:null;
-  if(!midLink&&senderStr){const ph=phoneN(senderStr);if(ph.length>=10){const mm=(await sb(env,`members?branch_id=eq.${B}&phone=eq.${encodeURIComponent(ph)}&select=id`).catch(()=>[]))[0];if(mm)midLink=mm.id}}
+  let midLink=b.member_id?+b.member_id:null,memPhone=null;
+  if(!midLink&&senderStr){const ph=phoneN(senderStr);if(ph.length>=10){const mm=(await sb(env,`members?branch_id=eq.${B}&phone=eq.${encodeURIComponent(ph)}&select=id,phone`).catch(()=>[]))[0];if(mm){midLink=mm.id;memPhone=mm.phone}}}
+  else if(midLink){const mm=(await sb(env,`members?id=eq.${midLink}&select=phone`).catch(()=>[]))[0];if(mm)memPhone=mm.phone}
+  if(!memPhone&&senderStr)memPhone=smsPhone(senderStr);
   const ins=(await sb(env,'offerings',{m:'POST',b:{branch_id:B,type:'physical',category:cat,amount:a,sender:senderStr,note:String(b.note||'').trim().slice(0,255)||null,recorded_by:by,...(midLink?{member_id:midLink}:{})},prefer:'return=representation'}))?.[0]||null;
   await sb(env,'audit_log',{m:'POST',b:{actor:tag,action:'record_physical',detail:money(a)+' '+cat+(ins?.receipt_no?' ('+ins.receipt_no+')':''),ip},prefer:'return=minimal'});
+  if(memPhone&&ins?.receipt_no&&await smsOn(env,B)){
+   await sendSms(env,{to:memPhone,message:`Receipt ${ins.receipt_no}: Thank you for your ${cat} of ${money(a)}. God bless you!`,kind:'receipt',branch_id:B,by:tag}).catch(()=>{})}
   return json({ok:true,id:ins?.id,receipt_no:ins?.receipt_no,message:'Recorded '+money(a)+'.'})}
  if(post&&p==='/api/staff/pledge-payment'){
-  const a=Math.round(parseFloat(b.amount)*100)/100,pl=(await sb(env,`pledges?id=eq.${+b.pledge||0}&select=id,members(branch_id)`))[0];
+  const a=Math.round(parseFloat(b.amount)*100)/100,pl=(await sb(env,`pledges?id=eq.${+b.pledge||0}&select=id,programs(title),members(id,branch_id,full_name,phone)`))[0];
   if(!pl||pl.members.branch_id!==B)return bad('Choose a pledge from your fellowship.');
   if(!(a>0))return bad('Enter a valid amount.');
   const done=+await rpc(env,'record_pledge_payment',{p_pledge:pl.id,p_amount:a,p_by:by,p_type:'physical'});
   if(done<=0)return bad('Nothing to record: that pledge is already fully paid.');
   const latest=(await sb(env,`pledge_payments?pledge_id=eq.${pl.id}&order=id.desc&limit=1`).catch(()=>[]))[0];
+  if(pl.members?.phone&&await smsOn(env,B)){
+   const rno=latest?.receipt_no||'Pledge #'+pl.id;
+   await sendSms(env,{to:pl.members.phone,message:`Receipt ${rno}: Pledge payment of ${money(done)}${pl.programs?.title?' for '+pl.programs.title:''} received. God bless you!`,kind:'receipt',branch_id:B,by:tag}).catch(()=>{})}
   return json({ok:true,receipt_no:latest?.receipt_no,message:'Pledge payment of '+money(done)+' recorded.'})}
  if(post&&p==='/api/staff/void'){
   if(me.slot!=='main')return bad('Only the Main Secretary can void entries.',403);
@@ -488,19 +552,20 @@ async function adminRoute(req,env,p,q,b,ip){
   await dbUse(`branches?id=eq.${+b.id||0}`,{m:'PATCH',b:{name:String(b.name||'').trim(),kind,parent_id:par,momo_number:b.momo||null},prefer:'return=minimal'});
   await auditDev('admin_edit_unit',String(b.name||''));return json({ok:true,message:'Saved.'})}
  if(p==='/api/admin/admins'){if(!isSuper)return bad('Only the Super Admin can do that.',403);
-  const [st,lk]=await Promise.all([dbUse("staff?role=eq.admin&select=id,username,full_name,email,branch_id,privileges,active"),lockedSet()]);
+  const [st,lk]=await Promise.all([dbUse("staff?role=eq.admin&select=id,username,full_name,email,phone,branch_id,privileges,active"),lockedSet()]);
   const bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
   return json({admins:(st||[]).map(s=>({...s,unit:bnMap[s.branch_id]||'',locked:lk.has('s:'+String(s.username||'').toLowerCase())})),units:allB.map(x=>({...x,label:unitLabel(x)})),grantable:GRANT,blocked:BLOCK})}
  if(p==='/api/admin/admin'){if(!isSuper)return bad('Only the Super Admin can do that.',403);
-  if(b.a==='create'){const em=parseEmail(b.email);if(!em.ok)return bad('Enter a valid email address or leave it blank.');
+  if(b.a==='create'){const em=parseEmail(b.email),ph=parsePhone(b.phone);if(!em.ok)return bad('Enter a valid email address or leave it blank.');if(!ph.ok)return bad('Enter a valid Zambian phone number or leave it blank.');
    const sid=isDev?await devRpc(env,devJwt,'dev_create_staff',{p_role:'admin',p_branch:+b.branch,p_slot:null,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:b.privileges||[]})
     :await rpc(env,'create_staff',{p_role:'admin',p_branch:+b.branch,p_slot:null,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:b.privileges||[]});
-   if(em.val&&sid)await dbUse(`staff?id=eq.${sid}`,{m:'PATCH',b:{email:em.val},prefer:'return=minimal'});
+   if((em.val||ph.val)&&sid)await dbUse(`staff?id=eq.${sid}`,{m:'PATCH',b:{...(em.val?{email:em.val}:{}),...(ph.val?{phone:ph.val}:{})},prefer:'return=minimal'});
    await auditDev('admin_create_admin',b.username);return json({ok:true,message:'Admin created.'})}
   if(b.a==='privileges'){await dbUse(`staff?id=eq.${+b.id}&role=eq.admin`,{m:'PATCH',b:{privileges:b.privileges||[]},prefer:'return=minimal'});await auditDev('admin_set_privileges','#'+b.id);return json({ok:true,message:'Privileges saved.'})}
-  if(b.a==='email'){const em=parseEmail(b.email);if(!em.ok)return bad('Enter a valid email address or leave it blank.');
+  if(b.a==='email'){const em=parseEmail(b.email),ph=parsePhone(b.phone);if(!em.ok)return bad('Enter a valid email address or leave it blank.');if(b.phone!==undefined&&!ph.ok)return bad('Enter a valid Zambian phone number or leave it blank.');
    const s=(await dbUse(`staff?id=eq.${+b.id}&role=eq.admin`))[0];if(!s)return bad('Not found',404);
-   await dbUse(`staff?id=eq.${s.id}&role=eq.admin`,{m:'PATCH',b:{email:em.val},prefer:'return=minimal'});await auditDev('admin_set_email',s.username);return json({ok:true,message:em.val?'Email saved.':'Email cleared.'})}
+   const patch={email:em.val,...(b.phone!==undefined?{phone:ph.val}:{})};
+   await dbUse(`staff?id=eq.${s.id}&role=eq.admin`,{m:'PATCH',b:patch,prefer:'return=minimal'});await auditDev('admin_set_email',s.username);return json({ok:true,message:!em.val&&b.phone!==undefined&&ph.val?'Phone saved.':em.val?'Email saved.':'Email cleared.'})}
   if(b.a==='password'){if(isDev)await devRpc(env,devJwt,'dev_set_staff_password',{p_id:+b.id,p_password:String(b.password||'')});
    else await rpc(env,'staff_set_password',{p_id:+b.id,p_password:String(b.password||'')});
    await auditDev('admin_reset','#'+b.id);return json({ok:true,message:'Password changed.'})}
@@ -522,7 +587,7 @@ async function adminRoute(req,env,p,q,b,ip){
    await auditStaff('approval_threshold_edit',money(t));return json({ok:true,message:`Two-step approval threshold set to ${money(t)}.`})}
   await dbUse("settings?key=eq.profile",{m:'PATCH',b:{value:b.profile},prefer:'return=minimal'});await auditDev('profile_edit','');return json({ok:true,message:'Profile saved.'})}
  if(p==='/api/admin/accounts'){if(!can('accounts')||!flagOn('accounts'))return bad('You do not have permission for that.',403);
-  const [st,lk]=await Promise.all([dbUse("staff?role=eq.secretary&select=id,branch_id,slot,username,full_name,email,active"),isSuper?lockedSet():Promise.resolve(new Set())]);
+  const [st,lk]=await Promise.all([dbUse("staff?role=eq.secretary&select=id,branch_id,slot,username,full_name,email,phone,active"),isSuper?lockedSet():Promise.resolve(new Set())]);
   const mapS=s=>s?({...s,locked:lk.has('s:'+String(s.username||'').toLowerCase())}):null;
   return json({fellowships:units().map(x=>({id:x.id,name:x.name,label:x.label,is_main:x.is_main,slots:{main:mapS((st||[]).find(s=>s.branch_id===x.id&&s.slot==='main')),assistant:mapS((st||[]).find(s=>s.branch_id===x.id&&s.slot==='assistant'))}})),me:{username:by}})}
  if(p==='/api/admin/account'){if(!can('accounts'))return bad('You do not have permission for that.',403);
@@ -531,14 +596,15 @@ async function adminRoute(req,env,p,q,b,ip){
    return json({ok:true,message:'Your password changed.'})}
   if(!flagOn('accounts'))return bad('This feature is currently disabled.',403);
   if(b.a==='create'){if(scope&&!scope.includes(+b.branch))return bad('That church is outside your area.',403);
-   const em=parseEmail(b.email);if(!em.ok)return bad('Enter a valid email address or leave it blank.');
+   const em=parseEmail(b.email),ph=parsePhone(b.phone);if(!em.ok)return bad('Enter a valid email address or leave it blank.');if(!ph.ok)return bad('Enter a valid Zambian phone number or leave it blank.');
    const sid=isDev?await devRpc(env,devJwt,'dev_create_staff',{p_role:'secretary',p_branch:+b.branch,p_slot:b.slot,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:[]})
     :await rpc(env,'create_staff',{p_role:'secretary',p_branch:+b.branch,p_slot:b.slot,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:[]});
-   if(em.val&&sid)await dbUse(`staff?id=eq.${sid}`,{m:'PATCH',b:{email:em.val},prefer:'return=minimal'});
+   if((em.val||ph.val)&&sid)await dbUse(`staff?id=eq.${sid}`,{m:'PATCH',b:{...(em.val?{email:em.val}:{}),...(ph.val?{phone:ph.val}:{})},prefer:'return=minimal'});
    await auditDev('admin_create',b.username);return json({ok:true,message:'Account created.'})}
   const s=(await dbUse(`staff?id=eq.${+b.id}&role=eq.secretary`))[0];if(!s||(scope&&!scope.includes(s.branch_id)))return bad('Not found',404);
-  if(b.a==='email'){const em=parseEmail(b.email);if(!em.ok)return bad('Enter a valid email address or leave it blank.');
-   await dbUse(`staff?id=eq.${s.id}`,{m:'PATCH',b:{email:em.val},prefer:'return=minimal'});await auditDev('admin_set_email',s.username);return json({ok:true,message:em.val?'Email saved.':'Email cleared.'})}
+  if(b.a==='email'){const em=parseEmail(b.email),ph=parsePhone(b.phone);if(!em.ok)return bad('Enter a valid email address or leave it blank.');if(b.phone!==undefined&&!ph.ok)return bad('Enter a valid Zambian phone number or leave it blank.');
+   const patch={email:em.val,...(b.phone!==undefined?{phone:ph.val}:{})};
+   await dbUse(`staff?id=eq.${s.id}`,{m:'PATCH',b:patch,prefer:'return=minimal'});await auditDev('admin_set_email',s.username);return json({ok:true,message:!em.val&&b.phone!==undefined&&ph.val?'Phone saved.':em.val?'Email saved.':'Email cleared.'})}
   if(b.a==='password'){if(isDev)await devRpc(env,devJwt,'dev_set_staff_password',{p_id:s.id,p_password:String(b.password||'')});
    else await rpc(env,'staff_set_password',{p_id:s.id,p_password:String(b.password||'')});
    await auditDev('admin_reset',s.username);return json({ok:true,message:'Password changed.'})}
@@ -632,9 +698,10 @@ async function adminRoute(req,env,p,q,b,ip){
   if(!can('announcements')||!v2On('announcements'))return bad('You do not have permission for that.',403);
   const bnMap=Object.fromEntries(allB.map(x=>[x.id,unitLabel(x)]));
   const owns=a=>a&&(isSuper||(a.branch_id!==null&&scope.includes(a.branch_id)));
+  const smsFlag=await smsOn(env,unitScope);
   if(!post){
    const [rows,D]=[await dbUse('announcements?order=id.desc&limit=200').catch(()=>[]),today()];
-   return json({canAll:isSuper,units:units(),announcements:(rows||[]).filter(owns).map(a=>({...a,branch_label:a.branch_id?bnMap[a.branch_id]||'':'All branches',active:!a.expires_at||a.expires_at>=D}))})}
+   return json({canAll:isSuper,smsEnabled:smsFlag,units:units(),announcements:(rows||[]).filter(owns).map(a=>({...a,branch_label:a.branch_id?bnMap[a.branch_id]||'':'All branches',active:!a.expires_at||a.expires_at>=D}))})}
   if(b.a==='add'||b.a==='edit'){
    const title=String(b.title||'').trim().slice(0,140),bodyTxt=String(b.body||'').trim().slice(0,2000),exp=String(b.expires_at||'').trim()||null;
    if(!title||!bodyTxt)return bad('Title and body are required.');
@@ -642,15 +709,23 @@ async function adminRoute(req,env,p,q,b,ip){
    const br=b.branch===''||b.branch==null?null:+b.branch;
    if(br===null&&!isSuper)return bad('Choose a branch in your area.',403);
    if(br!==null&&(!allB.some(x=>x.id===br)||(scope&&!scope.includes(br))))return bad('That church is outside your area.',403);
+   const sendScopedSms=async()=>{
+    if(!b.send_sms||!(await smsOn(env,br??unitScope)))return;
+    const scIds=br===null?null:kidsOf(allB,br);
+    const ms=await dbUse(`members?${scIds?`branch_id=in.(${scIds.join(',')})&`:''}select=id,phone,branch_id`).catch(()=>[]);
+    const phones=(ms||[]).map(m=>m.phone).filter(Boolean);
+    if(phones.length)await sendSms(env,{to:phones,message:`${title}: ${bodyTxt}`,kind:'announcement',branch_id:br,by:tag,dbWrite:dbUse}).catch(()=>{})};
    if(b.a==='add'){
     const ins=(await dbUse('announcements',{m:'POST',b:{branch_id:br,title,body:bodyTxt,expires_at:exp,created_by:tag,created_by_staff_id:isDev?null:me.id,created_by_dev_id:isDev?devUser.id:null},prefer:'return=representation'}))?.[0]||null;
     await auditStaff('announcement_add',`${br?bnMap[br]:'All branches'}: ${title}`);
+    await sendScopedSms();
     return json({ok:true,id:ins?.id,message:'Announcement posted.'})}
    const ex=(await dbUse(`announcements?id=eq.${+b.id||0}`))[0];
    if(!ex)return bad('Announcement not found.',404);
    if(!owns(ex))return bad('You cannot edit an announcement outside your scope.',403);
    await dbUse(`announcements?id=eq.${ex.id}`,{m:'PATCH',b:{branch_id:br,title,body:bodyTxt,expires_at:exp,updated_at:new Date().toISOString()},prefer:'return=minimal'});
    await auditStaff('announcement_edit',`#${ex.id} ${title}`);
+   await sendScopedSms();
    return json({ok:true,message:'Announcement updated.'})}
   if(b.a==='delete'){
    const ex=(await dbUse(`announcements?id=eq.${+b.id||0}`))[0];
@@ -766,8 +841,12 @@ async function devRoute(req,env,p,q,b,ip){
    const code=randOtp();
    const challenge=await rpc(env,'create_login_otp',{p_role:'developer',p_user_id:devId,p_code:code,p_ttl_seconds:600});
    const jwtTmp=await mkDevJwt(env,devId);
-   const dRow=(await devSb(env,jwtTmp,`dev_accounts?id=eq.${devId}&select=full_name,email`).catch(()=>[]))[0];
-   const sentTo=await sendOtpEmail(env,dRow?.email,dRow?.full_name||un,'developer',code);
+   const dRow=(await devSb(env,jwtTmp,`dev_accounts?id=eq.${devId}&select=full_name,email,phone`).catch(()=>[]))[0];
+   let sentTo=null;
+   if(await smsOn(env,null)&&dRow?.phone){
+    const sr=await sendSms(env,{to:dRow.phone,message:`Your Kingdom Heralds Developer code is: ${code}. It expires in 10 minutes.`,kind:'staff_otp',by:'developer:'+un,dbWrite:(path,o)=>devSb(env,jwtTmp,path,o)});
+    if(sr.ok)sentTo=maskPhone(sr.to||dRow.phone)}
+   if(!sentTo)sentTo=await sendOtpEmail(env,dRow?.email,dRow?.full_name||un,'developer',code);
    return json({ok:true,otp_required:true,challenge,sent_to:sentTo})}
   await rpc(env,'login_clear',{p_ident:id});
   const jwt=await mkDevJwt(env,devId);
@@ -813,15 +892,27 @@ async function devRoute(req,env,p,q,b,ip){
   if(ex)await devSb(env,jwt,`feature_flags?id=eq.${ex.id}`,{m:'PATCH',b:{enabled:on},prefer:'return=minimal'});
   else await devSb(env,jwt,'feature_flags',{m:'POST',b:{key,unit_id:uid,enabled:on},prefer:'return=minimal'});
   await audit('flag_set',`${key}@${uid??'global'}=${on}`);return json({ok:true,message:`${key} set to ${on?'ON':'OFF'}.`})}
+ if(p==='/api/dev/sms'){
+  if(!post){
+   const [rows,enabled]=await Promise.all([devSb(env,jwt,'sms_log?order=id.desc&limit=100').catch(()=>[]),smsOn(env,null)]);
+   return json({rows:rows||[],enabled,sandbox:env.AT_SANDBOX==='true',configured:!!(env.AT_USERNAME&&env.AT_API_KEY)})}
+  const ph=parsePhone(b.to);
+  if(!ph.ok||!ph.val)return bad('Enter a valid Zambian phone number (e.g. 0971234567 or +260971234567).');
+  const txt=String(b.message||'Kingdom Heralds International: Test SMS from Developer Console.').trim()||'Test SMS';
+  const res=await sendSms(env,{to:ph.val,message:txt,kind:'test',by:'developer:'+dev.username,dbWrite:(path,o)=>devSb(env,jwt,path,o)});
+  await audit('test_sms',`${ph.val}: ${res.status}`).catch(()=>{});
+  return json({ok:res.ok,result:res,message:res.ok?`Test SMS sent to ${ph.val} (${res.status}${res.cost?', '+res.cost:''}).`:`Error: SMS send failed — ${res.status}`})}
  if(p==='/api/dev/users'){
-  if(!post){const [st,ms,ps,ds,brs,lks]=await Promise.all([devSb(env,jwt,'staff?select=id,role,branch_id,slot,full_name,username,active,privileges&order=id.asc'),devSb(env,jwt,'members?select=id,branch_id,full_name,phone,must_change,birth_date,marriage_date,department&order=id.asc'),devSb(env,jwt,'people?order=id.asc&limit=300'),devSb(env,jwt,'dev_accounts?select=id,username,full_name,active,created_at&order=id.asc'),devSb(env,jwt,'branches?select=*&order=is_main.desc,name.asc'),devRpc(env,jwt,'dev_locked_idents',{}).catch(()=>[])]);
+  if(!post){const [st,ms,ps,ds,brs,lks]=await Promise.all([devSb(env,jwt,'staff?select=id,role,branch_id,slot,full_name,username,email,phone,active,privileges&order=id.asc'),devSb(env,jwt,'members?select=id,branch_id,full_name,phone,must_change,birth_date,marriage_date,department&order=id.asc'),devSb(env,jwt,'people?order=id.asc&limit=300'),devSb(env,jwt,'dev_accounts?select=id,username,full_name,active,created_at&order=id.asc'),devSb(env,jwt,'branches?select=*&order=is_main.desc,name.asc'),devRpc(env,jwt,'dev_locked_idents',{}).catch(()=>[])]);
    const bn=Object.fromEntries((brs||[]).map(x=>[x.id,unitLabel(x)])),lkSet=new Set((lks||[]).map(x=>x.ident));
    return json({staff:(st||[]).map(s=>({...s,unit:s.branch_id?bn[s.branch_id]:'All',locked:lkSet.has('s:'+String(s.username||'').toLowerCase())})),members:(ms||[]).map(m=>({...m,unit:bn[m.branch_id]||'',locked:lkSet.has(m.phone)})),people:(ps||[]).map(x=>({...x,unit:bn[x.branch_id]||''})),devAccounts:(ds||[]).map(a=>({...a,locked:lkSet.has('d:'+String(a.username||'').toLowerCase())})),units:(brs||[]).map(x=>({...x,label:unitLabel(x)})),grantable:GRANT,locks:lks||[]})}
   const t=b.target;
   if(t==='unlock'){const ident=String(b.ident||'').trim();if(!ident)return bad('Account identifier required.');
    await devRpc(env,jwt,'dev_unlock_login',{p_ident:ident});await audit('dev_unlock',ident);return json({ok:true,message:'Account unlocked.'})}
   if(t==='staff'){
-   if(b.a==='create'){await devRpc(env,jwt,'dev_create_staff',{p_role:b.role||'secretary',p_branch:b.role==='superadmin'?null:+b.branch,p_slot:b.role==='secretary'?(b.slot||'main'):null,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:b.role==='admin'?(b.privileges||[]):[]});
+   if(b.a==='create'){const ph=parsePhone(b.phone),em=parseEmail(b.email);if(!em.ok)return bad('Enter a valid email.');if(!ph.ok)return bad('Enter a valid Zambian phone.');
+    const sid=await devRpc(env,jwt,'dev_create_staff',{p_role:b.role||'secretary',p_branch:b.role==='superadmin'?null:+b.branch,p_slot:b.role==='secretary'?(b.slot||'main'):null,p_name:String(b.name||''),p_username:String(b.username||''),p_password:String(b.password||''),p_privileges:b.role==='admin'?(b.privileges||[]):[]});
+    if((em.val||ph.val)&&sid)await devSb(env,jwt,`staff?id=eq.${sid}`,{m:'PATCH',b:{...(em.val?{email:em.val}:{}),...(ph.val?{phone:ph.val}:{})},prefer:'return=minimal'});
     await audit('dev_create_staff',`${b.role}:${b.username}`);return json({ok:true,message:'Staff account created.'})}
    if(b.a==='update'){const patch={role:b.role,branch_id:b.role==='superadmin'?null:+b.branch_id,slot:b.role==='secretary'?(b.slot||'main'):null,full_name:b.full_name,username:b.username,privileges:b.role==='admin'?(b.privileges||[]):[],active:b.active!==undefined?!!b.active:true};
     await devSb(env,jwt,`staff?id=eq.${+b.id}`,{m:'PATCH',b:patch,prefer:'return=minimal'});await audit('dev_update_staff',b.username);return json({ok:true,message:'Staff updated.'})}
@@ -857,7 +948,7 @@ async function devRoute(req,env,p,q,b,ip){
    if(b.a==='create'){await devSb(env,jwt,'branches',{m:'POST',b:{name:String(b.name||'').trim(),kind:b.kind||'fellowship',parent_id:b.parent_id?+b.parent_id:null,is_main:!!b.is_main,momo_number:b.momo_number||null},prefer:'return=minimal'});await audit('create_unit',b.name);return json({ok:true,message:'Unit added.'})}
    if(b.a==='update'){await devSb(env,jwt,`branches?id=eq.${+b.id}`,{m:'PATCH',b:{name:String(b.name||'').trim(),kind:b.kind,parent_id:b.parent_id?+b.parent_id:null,momo_number:b.momo_number||null},prefer:'return=minimal'});await audit('update_unit',b.name);return json({ok:true,message:'Unit saved.'})}
    if(b.a==='delete'){await devSb(env,jwt,`branches?id=eq.${+b.id}`,{m:'DELETE',prefer:'return=minimal'});await audit('delete_unit','#'+b.id);return json({ok:true,message:'Unit deleted.'})}}}
- if(p==='/api/dev/data'){const ALLOWED=['offerings','pledges','pledge_payments','expenses','branch_budgets','announcements','approval_requests','events','programs','services','attendance','notifications','assets','audit_log','dev_audit'];
+ if(p==='/api/dev/data'){const ALLOWED=['offerings','pledges','pledge_payments','expenses','branch_budgets','announcements','approval_requests','events','programs','services','attendance','notifications','assets','sms_log','audit_log','dev_audit'];
   const tbl=String(q.table||b.table||'offerings');if(!ALLOWED.includes(tbl))return bad('Unknown table.');
   if(!post)return json({table:tbl,tables:ALLOWED,rows:await devSb(env,jwt,`${tbl}?order=id.desc&limit=200`)});
   const row=typeof b.row==='string'?JSON.parse(b.row):b.row;

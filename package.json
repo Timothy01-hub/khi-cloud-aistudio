@@ -8,7 +8,7 @@
   "ui": "vite",
   "build": "vite build",
   "deploy": "vite build && wrangler deploy",
-  "test": "node test/smoke.mjs && node test/render.mjs && node test/staff.mjs && node test/mock.mjs && node test/preview.mjs && node test/dev-ui.mjs && node test/v2.mjs && node test/v3.mjs",
+  "test": "node test/smoke.mjs && node test/render.mjs && node test/staff.mjs && node test/mock.mjs && node test/preview.mjs && node test/dev-ui.mjs && node test/v2.mjs && node test/v3.mjs && node test/v4.mjs",
   "preview": "node scripts/build-preview.mjs",
   "test:sql": "node test/sql.mjs"
  },
